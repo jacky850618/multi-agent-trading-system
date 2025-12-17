@@ -13,6 +13,9 @@ DEFAULT_CONFIG = {
     "TAVILY_API_KEY": "",
     "LANGSMITH_API_KEY": "",
     "API_BASE": "http://127.0.0.1:8000",
+    "proxy_enabled": False,
+    "proxy_host": "127.0.0.1",
+    "proxy_port": "7890",
     "max_debate_rounds": 2,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
@@ -58,6 +61,54 @@ def is_configured(config):
     return all(config.get(key, "").strip() != "" for key in required)
 
 
+# ========================== 测试连接函数（测试 Google 首页 + 本地后端） ==========================
+def test_connections(session):
+    results = []
+    try:
+        resp = session.get("https://www.google.com", timeout=10)
+        if resp.status_code == 200:
+            results.append(("✅ 外部网络（Google）", "连接成功，代理工作正常"))
+        else:
+            results.append(("⚠️ 外部网络（Google）", f"状态码 {resp.status_code}"))
+    except Exception as e:
+        results.append(("❌ 外部网络（Google）", f"连接失败：{str(e)}"))
+
+    return results
+
+
+def get_smart_session(config):
+    """
+    智能代理会话：
+    - 如果目标是 127.0.0.1 或 localhost → 直连（不走代理）
+    - 其他所有请求 → 走用户配置的代理
+    """
+    session = requests.Session()
+
+    if config.get("proxy_enabled", False):
+        host = config.get("proxy_host", "").strip()
+        port = config.get("proxy_port", "").strip()
+        if host and port:
+            proxy_url = f"http://{host}:{port}"
+            # 设置全局代理
+            session.proxies.update({
+                "http": proxy_url,
+                "https": proxy_url,
+            })
+            st.sidebar.success(f"代理已启用：{proxy_url}（外部服务走代理，本地直连）")
+        else:
+            st.sidebar.warning("代理启用但地址/端口为空，将直连所有服务")
+
+        # 关键：添加 NO_PROXY 环境变量，绕过本地地址
+        # requests 尊重 NO_PROXY
+        import os
+        os.environ["NO_PROXY"] = "127.0.0.1,localhost,0.0.0.0"
+
+    else:
+        st.sidebar.info("代理未启用（所有服务直连）")
+
+    return session
+
+
 st.set_page_config(
     page_title="深度思考股票分析系统",  # 浏览器标签页标题
     page_icon="🧠",  # 图标
@@ -82,7 +133,30 @@ with st.sidebar:
             help="后端服务地址，例如：http://127.0.0.1:8000 或 https://your-domain.com"
         )
 
-    with st.expander("🔑 API Keys（必须填写）", expanded=not is_configured(user_config)):
+    with st.expander("🌐 网络代理设置"):
+        proxy_enabled = st.checkbox("启用网络代理（仅外部服务）", value=user_config.get("proxy_enabled", False))
+        proxy_host = st.text_input("代理地址（Host）", value=user_config.get("proxy_host", "127.0.0.1"))
+        proxy_port = st.text_input("代理端口（Port）", value=user_config.get("proxy_port", "7890"))
+
+        if st.button("🧪 测试网络连接", type="secondary"):
+            temp_config = user_config.copy()
+            temp_config.update({
+                "proxy_enabled": proxy_enabled,
+                "proxy_host": proxy_host,
+                "proxy_port": proxy_port
+            })
+            test_session = get_smart_session(temp_config)
+            test_results = test_connections(test_session)
+
+            for icon, msg in test_results:
+                if "成功" in icon:
+                    st.success(f"{icon} {msg}")
+                elif "失败" in icon:
+                    st.error(f"{icon} {msg}")
+                else:
+                    st.warning(f"{icon} {msg}")
+
+    with st.expander("🔑 API Keys", expanded=not is_configured(user_config)):
         openai_key = st.text_input(
             "OpenAI API Key",
             value=user_config.get("OPENAI_API_KEY", ""),
@@ -126,7 +200,7 @@ with st.sidebar:
         max_recur = st.number_input("最大递归限制", 50, 500, user_config.get("max_recur_limit", 100))
         online_tools = st.checkbox("启用在线工具", value=user_config.get("online_tools", True))
 
-    with st.expander("✍️ 智能体提示词自定义"):
+    with st.expander("✍️ 自定义提示词"):
         prompts = user_config.get("prompts", DEFAULT_CONFIG["prompts"]).copy()
         for key, label in [
             ("bull", "多头分析员"),
@@ -149,6 +223,9 @@ with st.sidebar:
             "TAVILY_API_KEY": tavily_key.strip(),
             "LANGSMITH_API_KEY": langsmith_key.strip(),
             "API_BASE": api_base.strip().rstrip("/"),  # 去除末尾斜杠
+            "proxy_enabled": proxy_enabled,
+            "proxy_host": proxy_host.strip(),
+            "proxy_port": proxy_port.strip(),
             "max_debate_rounds": max_debate,
             "max_risk_discuss_rounds": max_risk,
             "max_recur_limit": max_recur,

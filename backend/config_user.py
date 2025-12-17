@@ -2,6 +2,7 @@
 import json
 import os
 from typing import Dict, Any
+import requests
 
 CONFIG_USER_FILE = "config_user.json"  # 与前端共用同一个文件
 
@@ -32,6 +33,25 @@ def set_env(config: Dict[str, Any], key: str):
     os.environ[key] = config[key]
 
 
+def apply_proxy_settings(config: Dict[str, Any]):
+    if config.get("proxy_enabled", False):
+        host = config.get("proxy_host", "").strip()
+        port = config.get("proxy_port", "").strip()
+        if host and port:
+            proxy_url = f"http://{host}:{port}"
+            os.environ["HTTP_PROXY"] = proxy_url
+            os.environ["HTTPS_PROXY"] = proxy_url
+            os.environ["NO_PROXY"] = "127.0.0.1,localhost,0.0.0.0"
+            print(f"🌐 全局代理已启用：{proxy_url}")
+        else:
+            print("⚠️ 代理配置不完整")
+    else:
+        # 清理残留
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
+            os.environ.pop(key, None)
+        print("🌐 代理已禁用")
+
+
 def load_user_config() -> Dict[str, Any]:
     """加载用户自定义配置，如果文件不存在返回默认"""
     if os.path.exists(CONFIG_USER_FILE):
@@ -56,7 +76,7 @@ def load_user_config() -> Dict[str, Any]:
 
 # 全局配置（后端启动时加载一次）
 USER_CONFIG = load_user_config()
-
+apply_proxy_settings(USER_CONFIG)
 
 # 提供获取函数，便于其他模块导入
 def get_user_config() -> Dict[str, Any]:

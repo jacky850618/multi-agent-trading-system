@@ -92,6 +92,7 @@ def create_trading_graph():
     ]
     tool_node = ToolNode(all_tools)
 
+    print(f"启用分析师节点...")
     # 独立的分析师节点
     market_analyst_node = create_analyst_node(
         quick_thinking_llm, toolkit,
@@ -121,7 +122,7 @@ def create_trading_graph():
     # 独立的消息清理节点
     msg_clear_node = create_msg_delete()
 
-    # 独立的研究员节点
+    print(f"启用研究员节点...")
     bull_researcher_node = create_researcher_node(quick_thinking_llm,
                                                   memories["bull"],
                                                   prompts["bull"],
@@ -131,7 +132,7 @@ def create_trading_graph():
                                                   "Bear Analyst")
     research_manager_node = create_research_manager(deep_thinking_llm, memories["invest_judge"])
 
-    # 独立的交易员和风控节点
+    print(f"启用交易员和风控节点...")
     trader_node = functools.partial(create_trader(quick_thinking_llm, memories["trader"]), name="Trader")
     risky_node = create_risk_debator(quick_thinking_llm, prompts["risky"],
                                      "Risky Analyst")
@@ -147,7 +148,8 @@ def create_trading_graph():
         max_risk_discuss_rounds=user_config['max_risk_discuss_rounds']
     )
 
-    # 构建 workflow
+    print(f"开始构建Workflow...")
+
     workflow = StateGraph(AgentState)
 
     # 添加节点
@@ -192,6 +194,7 @@ def create_trading_graph():
     workflow.add_conditional_edges("Neutral Analyst", conditional_logic.should_continue_risk_analysis)
     workflow.add_edge("Risk Judge", END)
 
+    print(f"开始编译Workflow...")
     return workflow.compile()
 
 
