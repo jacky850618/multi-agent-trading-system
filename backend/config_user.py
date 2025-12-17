@@ -1,13 +1,10 @@
-# backend/config_user.py
 import json
 import os
 from typing import Dict, Any
-import requests
 
 CONFIG_USER_FILE = "config_user.json"  # 与前端共用同一个文件
 
 DEFAULT_USER_CONFIG = {
-    "OPENAI_API_KEY": "",
     "FINNHUB_API_KEY": "",
     "TAVILY_API_KEY": "",
     "LANGSMITH_API_KEY": "",
@@ -19,13 +16,21 @@ DEFAULT_USER_CONFIG = {
         "bull": "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。",
         "bear": "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。",
         "risky": "您是冒险型风险分析师。您主张高回报机会和大胆策略。",
-        "safe": "您是稳健/保守型风险分析师。您优先考虑资本保值和最小化波动性。",
+        "safe": "您是稳健型风险分析师。您优先考虑资本保值和最小化波动性。",
         "neutral": "您是平衡型风险分析师。您提供平衡的视角，权衡收益和风险。",
         "market_analyst": "您是一位专门分析金融市场的交易助理。您的职责是选择最相关的技术指标来分析股票的价格走势、动量和波动性。您必须使用工具获取历史数据，然后生成一份包含分析结果的报告，其中包括一个汇总表。",
         "social_analyst": "您是一名社交媒体分析师。您的工作是分析过去一周内特定公司的社交媒体帖子和公众情绪。使用您的工具查找相关讨论，并撰写一份全面的报告，详细说明您的分析、见解以及对交易者的影响，包括一份汇总表。",
         "news_analyst": "您是一名新闻研究员，负责分析过去一周的最新新闻和趋势。请撰写一份关于当前世界形势的综合报告，内容需与交易和宏观经济相关。请使用您的工具提供全面、详细的分析，包括汇总表。",
         "fundamentals_analyst": "您是一名研究员，正在分析公司的基本面信息。请撰写一份关于公司财务状况、内部人士情绪和交易情况的综合报告，以全面了解其基本面状况，并附上汇总表。"
-    }
+    },
+    "llm_provider": "openai",
+    "deep_think_llm": "gpt-4o",
+    "quick_think_llm": "gpt-4o-mini",
+    "backend_url": "https://api.openai.com/v1",
+    "OPENAI_API_KEY": "",
+    "DEEPSEEK_API_KEY": "",
+    "QWEN_API_KEY": "",
+    "DOUBAO_API_KEY": "",
 }
 
 
@@ -61,7 +66,6 @@ def load_user_config() -> Dict[str, Any]:
             # 合并默认值，确保新字段不会缺失
             config = {**DEFAULT_USER_CONFIG, **user_config}
 
-            set_env(config, "OPENAI_API_KEY")
             set_env(config, "FINNHUB_API_KEY")
             set_env(config, "TAVILY_API_KEY")
             set_env(config, "LANGSMITH_API_KEY")

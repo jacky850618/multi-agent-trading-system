@@ -14,11 +14,11 @@ class InvestDebateState(TypedDict):
     count: int  # 用于跟踪辩论轮数的计数器。
 
 
-# 记录风控团队（激进、保守、中立）的辩论历史和轮次
+# 记录风控团队（激进、稳健、平衡）的辩论历史和轮次
 # 风险管理团队辩论的状态
 class RiskDebateState(TypedDict):
     risky_history: str  # 激进型风险承担者的历史记录。
-    safe_history: str  # 保守型智能体的历史记录。
+    safe_history: str  # 稳健型智能体的历史记录。
     neutral_history: str  # 平衡型智能体的历史记录。
     history: str  # 风险讨论的完整记录。
     latest_speaker: str  # 跟踪最后一位发言的智能体。

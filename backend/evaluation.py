@@ -76,11 +76,20 @@ evaluator_chain = evaluator_prompt | deep_thinking_llm.with_structured_output(Ev
 
 def evaluate_ground_truth(ticker, trade_date, signal):
     try:
+        # Import locally to avoid accidental shadowing of the datetime name
+        from datetime import datetime, timedelta
+
         start_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
-        # Check data for the next 8 calendar days to increase chance of getting 5 trading days
-        end_date = start_date + timedelta(days=8)
+        # Try a longer window to ensure we can find 5 trading days (markets have weekends/holidays)
+        end_date = start_date + timedelta(days=14)
 
         data = yf.download(ticker, start=start_date.isoformat(), end=end_date.isoformat(), progress=False)
+
+        # If initial window returns fewer than 5 trading days, expand to 30 days as a fallback
+        if len(data) < 5:
+            end_date = start_date + timedelta(days=30)
+            data = yf.download(ticker, start=start_date.isoformat(), end=end_date.isoformat(), progress=False)
+
         if len(data) < 5:
             return f"Insufficient data for ground truth evaluation. Found only {len(data)} days."
 
@@ -88,7 +97,8 @@ def evaluate_ground_truth(ticker, trade_date, signal):
         first_trading_day_index = 0
         while data.index[first_trading_day_index].date() < start_date:
             first_trading_day_index += 1
-            if first_trading_day_index >= len(data) - 5: return "Could not align trade date."
+            if first_trading_day_index >= len(data) - 5:
+                return "Could not align trade date."
 
         open_price = data['Open'].iloc[first_trading_day_index]
         close_price_5_days_later = data['Close'].iloc[first_trading_day_index + 4]

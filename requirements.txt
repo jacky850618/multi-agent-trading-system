@@ -6,6 +6,7 @@ langchain-openai
 langchain-community
 streamlit
 fastapi
+langchain-deepseek
 
 # Foundational libraries for data and LLMs
 openai

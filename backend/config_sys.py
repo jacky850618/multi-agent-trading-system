@@ -13,11 +13,6 @@ os.environ["LANGSMITH_PROJECT"] = "深度思考量化交易系统"
 
 CONFIG_SYS = {
     "results_dir": "./results",
-    # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-4o",       # 用于复杂推理和最终决策的强大模型。
-    "quick_think_llm": "gpt-4o-mini", # 用于数据处理和初步分析的快速、低成本模型。
-    "backend_url": "https://api.openai.com/v1",
     "data_cache_dir": "./data_cache"# 用于缓存在线数据的目录。
 }
 

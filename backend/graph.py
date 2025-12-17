@@ -24,38 +24,67 @@ class ConditionalLogic:
         # 存储配置中的最大轮数。
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
+        # 防护上限，避免意外无限循环
+        self._safety_max_steps = 200
+        self._debug_counter = 0
 
     # 此函数决定分析智能体是应该继续还是调用工具。
     def should_continue_analyst(self, state: AgentState) -> str:
         # tools_condition 辅助函数检查状态中的最后一条消息。
         # 如果是工具调用，则返回"tools"。否则，返回"continue"。
-        return "tools" if tools_condition(state) == "tools" else "continue"
+        # 除了检查 tools_condition 外，还对消息长度做上限保护，防止 ReAct 在图中无限循环。
+        res = "tools" if tools_condition(state) == "tools" else "continue"
+        # 如果消息历史过长，强制结束工具循环
+        try:
+            msgs_len = len(state.get('messages', []))
+        except Exception:
+            msgs_len = 0
+        if msgs_len > 12:
+            print(f"[ConditionalLogic] messages length {msgs_len} exceeds limit, forcing 'continue'.")
+            res = "continue"
+        self._debug_counter += 1
+        print(f"[ConditionalLogic] should_continue_analyst called -> {res} (debug_count={self._debug_counter})")
+        if self._debug_counter > self._safety_max_steps:
+            print("[ConditionalLogic] Safety limit reached in analyst loop, forcing 'continue'.")
+            return "continue"
+        return res
 
     # 此函数控制投资辩论的流程。
     def should_continue_debate(self, state: AgentState) -> str:
-        if state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds:
+        self._debug_counter += 1
+        count = state["investment_debate_state"]["count"]
+        current = state["investment_debate_state"]["current_response"]
+        print(f"[ConditionalLogic] should_continue_debate called -> count={count}, current_response={repr(current)} (debug_count={self._debug_counter})")
+        # 安全上限跳出
+        if self._debug_counter > self._safety_max_steps:
+            print("[ConditionalLogic] Safety limit reached in debate loop, routing to Research Manager.")
             return "Research Manager"
-        return "Bear Researcher" if state["investment_debate_state"]["current_response"].startswith("Bull") \
-            else "Bull Researcher"
+        if count >= 2 * self.max_debate_rounds:
+            return "Research Manager"
+        return "Bear Researcher" if current.startswith("Bull") else "Bull Researcher"
 
     # 此函数控制风险管理讨论的流程。
     def should_continue_risk_analysis(self, state: AgentState) -> str:
-        if state["risk_debate_state"]["count"] >= 3 * self.max_risk_discuss_rounds:
-            return "Risk Judge"
+        self._debug_counter += 1
+        count = state["risk_debate_state"]["count"]
         speaker = state["risk_debate_state"]["latest_speaker"]
+        print(f"[ConditionalLogic] should_continue_risk_analysis called -> count={count}, latest_speaker={speaker} (debug_count={self._debug_counter})")
+        if self._debug_counter > self._safety_max_steps:
+            print("[ConditionalLogic] Safety limit reached in risk loop, routing to Risk Judge.")
+            return "Risk Judge"
+        if count >= 3 * self.max_risk_discuss_rounds:
+            return "Risk Judge"
         if speaker == "Risky Analyst": return "Safe Analyst"
         if speaker == "Safe Analyst": return "Neutral Analyst"
         return "Risky Analyst"
 
 
-# 此函数创建一个节点，用于清除状态中的消息。
 def create_msg_delete():
-    # 此辅助函数旨在用作图中的一个节点。
     def delete_messages(state):
-        # 我们使用RemoveMessage来指定要删除的消息。
-        # 在这里，我们删除所有现有消息，并添加一条新的 HumanMessage 以继续流程。
-        return {"messages": [RemoveMessage(id=m.id) for m in state["messages"]] + [HumanMessage(content="Continue")]}
-
+        # 彻底清理消息历史，只保留一条继续提示
+        return {
+            "messages": [HumanMessage(content="Continue to next phase.")]
+        }
     return delete_messages
 
 
@@ -151,7 +180,6 @@ def create_trading_graph():
     print(f"开始构建Workflow...")
 
     workflow = StateGraph(AgentState)
-
     # 添加节点
     workflow.add_node("Market Analyst", market_analyst_node)
     workflow.add_node("Social Analyst", social_analyst_node)
@@ -168,34 +196,61 @@ def create_trading_graph():
     workflow.add_node("Neutral Analyst", neutral_node)
     workflow.add_node("Risk Judge", risk_manager_node)
 
-    # 设置入口和边（与原逻辑完全一致）
+    # 设置入口
     workflow.set_entry_point("Market Analyst")
+
+    # 分析师 ReAct 循环
     workflow.add_conditional_edges("Market Analyst", conditional_logic.should_continue_analyst,
                                    {"tools": "tools", "continue": "Msg Clear"})
     workflow.add_edge("tools", "Market Analyst")
-    workflow.add_edge("Msg Clear", "Social Analyst")
+
     workflow.add_conditional_edges("Social Analyst", conditional_logic.should_continue_analyst,
-                                   {"tools": "tools", "continue": "News Analyst"})
+                                   {"tools": "tools", "continue": "Msg Clear"})
     workflow.add_edge("tools", "Social Analyst")
+
     workflow.add_conditional_edges("News Analyst", conditional_logic.should_continue_analyst,
-                                   {"tools": "tools", "continue": "Fundamentals Analyst"})
+                                   {"tools": "tools", "continue": "Msg Clear"})
     workflow.add_edge("tools", "News Analyst")
+
     workflow.add_conditional_edges("Fundamentals Analyst", conditional_logic.should_continue_analyst,
-                                   {"tools": "tools", "continue": "Bull Researcher"})
+                                   {"tools": "tools", "continue": "Msg Clear"})
     workflow.add_edge("tools", "Fundamentals Analyst")
 
-    workflow.add_conditional_edges("Bull Researcher", conditional_logic.should_continue_debate)
-    workflow.add_conditional_edges("Bear Researcher", conditional_logic.should_continue_debate)
-    workflow.add_edge("Research Manager", "Trader")
+    # 所有分析师完成后，只跳转一次
+    workflow.add_edge("Msg Clear", "Bull Researcher")
 
+    # 辩论和风控
+    # 明确映射条件函数返回的字符串到图中的节点名，避免解析歧义导致无限循环
+    workflow.add_conditional_edges("Bull Researcher", conditional_logic.should_continue_debate,
+                                   {"Research Manager": "Research Manager",
+                                    "Bear Researcher": "Bear Researcher",
+                                    "Bull Researcher": "Bull Researcher"})
+    workflow.add_conditional_edges("Bear Researcher", conditional_logic.should_continue_debate,
+                                   {"Research Manager": "Research Manager",
+                                    "Bear Researcher": "Bear Researcher",
+                                    "Bull Researcher": "Bull Researcher"})
+    workflow.add_edge("Research Manager", "Trader")
     workflow.add_edge("Trader", "Risky Analyst")
-    workflow.add_conditional_edges("Risky Analyst", conditional_logic.should_continue_risk_analysis)
-    workflow.add_conditional_edges("Safe Analyst", conditional_logic.should_continue_risk_analysis)
-    workflow.add_conditional_edges("Neutral Analyst", conditional_logic.should_continue_risk_analysis)
+    # 为风险辩论也明确映射，以确保条件返回值被正确路由
+    workflow.add_conditional_edges("Risky Analyst", conditional_logic.should_continue_risk_analysis,
+                                   {"Risk Judge": "Risk Judge",
+                                    "Risky Analyst": "Risky Analyst",
+                                    "Safe Analyst": "Safe Analyst",
+                                    "Neutral Analyst": "Neutral Analyst"})
+    workflow.add_conditional_edges("Safe Analyst", conditional_logic.should_continue_risk_analysis,
+                                   {"Risk Judge": "Risk Judge",
+                                    "Risky Analyst": "Risky Analyst",
+                                    "Safe Analyst": "Safe Analyst",
+                                    "Neutral Analyst": "Neutral Analyst"})
+    workflow.add_conditional_edges("Neutral Analyst", conditional_logic.should_continue_risk_analysis,
+                                   {"Risk Judge": "Risk Judge",
+                                    "Risky Analyst": "Risky Analyst",
+                                    "Safe Analyst": "Safe Analyst",
+                                    "Neutral Analyst": "Neutral Analyst"})
     workflow.add_edge("Risk Judge", END)
 
-    print(f"开始编译Workflow...")
     return workflow.compile()
+
 
 
 def draw_trading_graph(trading_graph):
@@ -208,3 +263,4 @@ def draw_trading_graph(trading_graph):
         return Image(png_image)
     except Exception as e:
         print(f"Graph visualization failed: {e}. Please ensure pygraphviz is installed.")
+

@@ -2,9 +2,10 @@ from .storage import append_log, complete_task, task_storage
 from .graph import create_trading_graph
 from .evaluation import *
 from .agents import quick_thinking_llm
+from .agents import deep_thinking_llm
 from .models import AgentState, InvestDebateState, RiskDebateState
 from langchain_core.messages import HumanMessage
-import datetime
+from datetime import datetime, timedelta
 import traceback
 from .tools import Toolkit
 from .config_user import get_user_config
@@ -50,6 +51,7 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
         append_log(task_id, "🚀 开始执行多智能体工作流...")
 
         final_state = None
+        max_steps = user_config.get('max_graph_steps', 500)
         node_icons = {
             "Market Analyst": "📈 市场分析师开始分析技术指标",
             "Social Analyst": "💬 社交媒体分析师开始收集情绪数据",
@@ -60,16 +62,25 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
             "Research Manager": "👔 研究主管正在综合辩论，制定投资计划",
             "Trader": "💰 交易员正在制定交易提案",
             "Risky Analyst": "⚡ 激进风控提出高风险策略",
-            "Safe Analyst": "🛡️ 保守风控提出保护建议",
-            "Neutral Analyst": "⚖️ 中立风控提供平衡观点",
+            "Safe Analyst": "🛡️ 稳健风控提出保护建议",
+            "Neutral Analyst": "⚖️ 平衡风控提供平衡观点",
             "Risk Judge": "⚖️ 投资组合经理做出最终决策",
             "tools": "🔧 正在调用外部工具获取数据...",
         }
 
+        step = 0
         for i, chunk in enumerate(trading_graph.stream(graph_input, {"recursion_limit": user_config["max_recur_limit"]}), 1):
+            step += 1
+            if step > max_steps:
+                append_log(task_id, f"⚠️ Graph exceeded max steps ({max_steps}). Aborting to prevent infinite loop.")
+                # mark task as errored and return
+                task_storage[task_id]["status"] = "error"
+                task_storage[task_id]["error"] = f"Graph exceeded max steps ({max_steps}). Aborted."
+                return
             node_name = list(chunk.keys())[0]
             icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
             append_log(task_id, f"{icon_text}")
+            append_log(task_id, f"(graph step {step}) executed node: {node_name}")
 
             # 特殊处理：当某个分析师生成报告时，追加报告摘要
             state_update = chunk[node_name]
@@ -140,7 +151,28 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
             append_log(task_id, "LLM-as-a-Judge 评估：")
             append_log(task_id, str(eval_result.dict()))
         except Exception as e:
-            append_log(task_id, f"LLM评估失败: {str(e)}")
+            err_str = str(e)
+            append_log(task_id, f"LLM评估失败: {err_str}")
+            # Fallback: some providers don't support structured response_format. Try a plain prompt and parse JSON.
+            if "response_format type is unavailable" in err_str or "invalid_request_error" in err_str:
+                try:
+                    import json, re
+                    fallback_prompt = (
+                        "Please evaluate the final trading decision based on the reports. "
+                        "Return a JSON object with keys: reasoning_quality (1-10), evidence_based_score (1-10), "
+                        "actionability_score (1-10), justification (string).\n\n"
+                        f"Reports:\n{reports_summary}\n\nFinal decision:\n{final_state.get('final_trade_decision','')}")
+                    raw = deep_thinking_llm.invoke(fallback_prompt).content
+                    # extract json substring if wrapped
+                    m = re.search(r"\{.*\}", raw, re.S)
+                    if m:
+                        js = json.loads(m.group(0))
+                    else:
+                        js = json.loads(raw)
+                    append_log(task_id, "LLM-as-a-Judge fallback评估：")
+                    append_log(task_id, str(js))
+                except Exception as e2:
+                    append_log(task_id, f"LLM评估回退失败: {e2}")
 
         # 事实一致性审计（市场报告）
         try:

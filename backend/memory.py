@@ -3,19 +3,50 @@
 
 import chromadb
 from openai import OpenAI
-from .config_sys import CONFIG_SYS
+from .config_user import get_user_config
+
+
 # 将过去的交易情境 + 经验教训（reflection）存储为向量。
 # 在类似情境下检索历史经验，供智能体（如多空分析师、风控经理）参考，避免重复错误。
 # 每个关键智能体（如 Bull、Bear、Trader、Risk Manager）都会有自己的记忆实例
 
 class FinancialSituationMemory:
     def __init__(self, name):
-        # 使用 OpenAI 的小型嵌入模型对文本进行向量化
-        self.embedding_model = "text-embedding-3-small"
+
+        config = get_user_config()
+        # 动态获取 backend_url 和 provider
+        self.backend_url = config.get("backend_url", "https://api.openai.com/v1").rstrip("/")
+        self.provider = config.get("llm_provider", "openai").lower()
+
+        # 根据提供商选择合适的 embedding 模型
+        embedding_model_map = {
+            "openai": "text-embedding-3-small",
+            "deepseek": "text-embedding-3-small",  # DeepSeek 兼容 OpenAI 格式
+            "qwen": "text-embedding-v2",  # 通义千问专用 embedding 模型
+            "doubao": "text-embedding-3-small",  # 豆包兼容 OpenAI 格式
+        }
+
+        self.embedding_model = embedding_model_map.get(self.provider, "text-embedding-3-small")
+
+        # 创建 OpenAI 客户端（兼容多种平台）
+        api_key = ""
+        if "openai" in self.provider:
+            api_key = config.get("OPENAI_API_KEY", "")
+        elif "deepseek" in self.provider:
+            api_key = config.get("DEEPSEEK_API_KEY", "")
+        elif "qwen" in self.provider:
+            api_key = config.get("QWEN_API_KEY", "")
+        elif "doubao" in self.provider:
+            api_key = config.get("DOUBAO_API_KEY", "")
+
+        if not api_key:
+            raise ValueError(f"{self.provider.upper()} API Key 未配置，无法初始化记忆系统")
+
         # 初始化 OpenAI 客户端（指向您配置的后端）
-        self.client = OpenAI(base_url=CONFIG_SYS["backend_url"])
+        self.client = OpenAI(base_url=self.backend_url, api_key=api_key)
         # 创建一个 ChromaDB 客户端（允许重置以进行测试）
         self.chroma_client = chromadb.Client(chromadb.config.Settings(allow_reset=True))
+        self.collection_name = f"{name}_{self.provider}"  # 加上提供商避免冲突（可选）
         # 创建一个集合（类似于表格）来存储情境和建议
         self.situation_collection = self.chroma_client.create_collection(name=name)
 

@@ -8,27 +8,52 @@
 # 风控经理/最终决策者（Risk Manager）。
 #
 # 每个智能体使用特定的 Prompt + LLM + 工具/记忆，实现其专业角色和决策行为。
-
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from .config_sys import CONFIG_SYS
+from langchain_community.chat_models import ChatTongyi
+from langchain_deepseek import ChatDeepSeek
+from .config_user import load_user_config
 from .models import AgentState
 from .memory import FinancialSituationMemory
+import os
+
+user_config = load_user_config()
+provider = user_config["llm_provider"].lower()
+
+if "openai" in provider:
+    os.environ["OPENAI_API_KEY"] = user_config["OPENAI_API_KEY"]
+    base_url = user_config["backend_url"]
+elif "deepseek" in provider:
+    os.environ["DEEPSEEK_API_KEY"] = user_config["DEEPSEEK_API_KEY"]
+    base_url = user_config["backend_url"]  # 通常 https://api.deepseek.com/v1
+elif "qwen" in provider or "tongyi" in provider or "通义" in provider:
+    os.environ["DASHSCOPE_API_KEY"] = user_config["QWEN_API_KEY"]
+    base_url = user_config["backend_url"]  # https://dashscope.aliyuncs.com/compatible-mode/v1
+elif "doubao" in provider or "豆包" in provider:
+    os.environ["DOUBAO_API_KEY"] = user_config["DOUBAO_API_KEY"]  # 豆包通常用这个变量名
+    base_url = user_config["backend_url"]
+else:
+    raise ValueError(f"不支持的 LLM 提供商: {provider}")
+
+# 动态创建 LLM 实例
+def create_llm(model_name: str, temperature=0.1):
+    if "openai" in provider:
+        return ChatOpenAI(model=model_name, temperature=temperature, base_url=base_url)
+    elif "deepseek" in provider:
+        return ChatOpenAI(model=model_name, temperature=temperature, base_url=base_url, api_key=os.environ["DEEPSEEK_API_KEY"])
+    elif "qwen" in provider:
+        return ChatTongyi(model=model_name, temperature=temperature, api_key=os.environ["QWEN_API_KEY"])
+    elif "doubao" in provider:
+        return ChatOpenAI(model=model_name, temperature=temperature, base_url=base_url, api_key=os.environ["DOUBAO_API_KEY"])
+    else:
+        raise ValueError(f"未知提供商: {provider}")
 
 # 初始化功能强大的 LLM，用于高风险推理任务。
-deep_thinking_llm = ChatOpenAI(
-    model=CONFIG_SYS["deep_think_llm"],
-    base_url=CONFIG_SYS["backend_url"],
-    temperature=0.1
-)
+deep_thinking_llm = create_llm(user_config["deep_think_llm"], temperature=0.1)
 
 # 初始化速度更快、成本更低的 LLM，用于常规数据处理。
-quick_thinking_llm = ChatOpenAI(
-    model=CONFIG_SYS["quick_think_llm"],
-    base_url=CONFIG_SYS["backend_url"],
-    temperature=0.1
-)
-
+quick_thinking_llm = create_llm(user_config["quick_think_llm"], temperature=0.1)
 
 # 此函数是一个工厂，用于为特定类型的分析师创建一个 LangGraph 节点。
 def create_analyst_node(llm, toolkit, system_message, tools, output_field):
@@ -56,9 +81,16 @@ def create_analyst_node(llm, toolkit, system_message, tools, output_field):
     chain = prompt | llm.bind_tools(tools)
 
     def analyst_node(state: AgentState):
+        # 为每个分析师创建全新的干净消息历史
+        initial_messages = [
+            HumanMessage(content=f"Analyze {state['company_of_interest']} on {state['trade_date']}. "
+                                 f"Focus on {output_field.replace('_', ' ')}.")
+        ]
+
         # 传入完整的消息历史 + 动态变量
         result = chain.invoke({
-            "messages": state["messages"],
+            # "messages": state["messages"],
+            "messages": initial_messages,
             "current_date": state["trade_date"],
             "ticker": state["company_of_interest"]
         })
@@ -70,7 +102,13 @@ def create_analyst_node(llm, toolkit, system_message, tools, output_field):
         else:
             report = result.content  # 最终回答，生成报告
 
-        return {"messages": [result], output_field: report}
+        # 只更新报告字段，不污染全局 messages
+        update = {output_field: report}
+
+        # 保留 messages 用于工具调用循环，但不传递给下一个分析师
+        update["messages"] = state["messages"] + [result]
+
+        return update
 
     return analyst_node
 

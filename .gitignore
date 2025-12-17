@@ -2,3 +2,9 @@
 __pycache__/
 
 config_user.json
+
+data_cache/
+results/
+logs/
+
+*.log

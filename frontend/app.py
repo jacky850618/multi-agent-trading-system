@@ -8,11 +8,14 @@ import json
 
 # ========================== 默认配置 ==========================
 DEFAULT_CONFIG = {
-    "OPENAI_API_KEY": "",
     "FINNHUB_API_KEY": "",
     "TAVILY_API_KEY": "",
     "LANGSMITH_API_KEY": "",
     "API_BASE": "http://127.0.0.1:8000",
+    "llm_provider": "ChatGPT(Openai)",
+    "deep_think_llm": "gpt-4o",  # 用于复杂推理和最终决策的强大模型。
+    "quick_think_llm": "gpt-4o-mini",  # 用于数据处理和初步分析的快速、低成本模型。
+    "backend_url": "https://api.openai.com/v1",
     "proxy_enabled": False,
     "proxy_host": "127.0.0.1",
     "proxy_port": "7890",
@@ -24,7 +27,7 @@ DEFAULT_CONFIG = {
         "bull": "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。",
         "bear": "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。",
         "risky": "您是冒险型风险分析师。您主张高回报机会和大胆策略。",
-        "safe": "您是稳健 / 保守型风险分析师。您优先考虑资本保值和最小化波动性。",
+        "safe": "您是稳健型风险分析师。您优先考虑资本保值和最小化波动性。",
         "neutral": "您是平衡型风险分析师。您提供平衡的视角，权衡收益和风险。",
         "market_analyst": "您是一位专门分析金融市场的交易助理。您的职责是选择最相关的技术指标来分析股票的价格走势、动量和波动性。您必须使用工具获取历史数据，然后生成一份包含分析结果的报告，其中包括一个汇总表。",
         "social_analyst": "您是一名社交媒体分析师。您的工作是分析过去一周内特定公司的社交媒体帖子和公众情绪。使用您的工具查找相关讨论，并撰写一份全面的报告，详细说明您的分析、见解以及对交易者的影响，包括一份汇总表。",
@@ -57,8 +60,27 @@ def save_config(config):
 
 
 def is_configured(config):
-    required = ["OPENAI_API_KEY", "FINNHUB_API_KEY", "TAVILY_API_KEY"]
-    return all(config.get(key, "").strip() != "" for key in required)
+    """
+        检查是否已完成必要配置：
+        - Finnhub 和 Tavily 必须填写（数据源）
+        - LLM 平台（OpenAI / DeepSeek / 通义千问 / 豆包）至少配置一个 API Key
+        """
+    # 必填数据源
+    data_required = ["FINNHUB_API_KEY", "TAVILY_API_KEY"]
+    if not all(config.get(key, "").strip() != "" for key in data_required):
+        return False
+
+    # LLM 平台至少配置一个
+    llm_keys = [
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "QWEN_API_KEY",
+        "DOUBAO_API_KEY"
+    ]
+    if not any(config.get(key, "").strip() != "" for key in llm_keys):
+        return False
+
+    return True
 
 
 # ========================== 测试连接函数（测试 Google 首页 + 本地后端） ==========================
@@ -157,15 +179,6 @@ with st.sidebar:
                     st.warning(f"{icon} {msg}")
 
     with st.expander("🔑 API Keys", expanded=not is_configured(user_config)):
-        openai_key = st.text_input(
-            "OpenAI API Key",
-            value=user_config.get("OPENAI_API_KEY", ""),
-            type="password",
-            help=(
-                "**用途**：驱动所有大语言模型（GPT-4o、GPT-4o-mini），负责智能体的推理、辩论、报告生成和最终决策。\n\n"
-                "[申请 OpenAI API Key](https://platform.openai.com/api-keys)"
-            )
-        )
         finnhub_key = st.text_input(
             "Finnhub API Key",
             value=user_config.get("FINNHUB_API_KEY", ""),
@@ -194,6 +207,50 @@ with st.sidebar:
             )
         )
 
+    # 新增：单独的大语言模型配置面板
+    with st.expander("🤖 大语言模型配置"):
+        llm_provider_options = ["ChatGPT(Openai)", "Deepseek", "通义千问(qwen)", "豆包(doubao)"]
+        llm_provider = st.selectbox(
+            "LLM 提供商 (llm_provider)",
+            options=llm_provider_options,
+            index=llm_provider_options.index(user_config.get("llm_provider", "ChatGPT(Openai)")),
+            help="选择 LLM 服务提供商"
+        )
+
+        # 根据提供商显示对应的 API Key 输入框
+        if llm_provider == "ChatGPT(Openai)":
+            openai_api_key = st.text_input("OpenAI API Key", value=user_config.get("OPENAI_API_KEY", ""),
+                                           type="password",
+                                           help="**用途**：OpenAI/ChatGPT 的访问密钥\n\n[申请 OpenAI API Key](https://platform.openai.com/api-keys)")
+        elif llm_provider == "Deepseek":
+            deepseek_api_key = st.text_input("DeepSeek API Key", value=user_config.get("DEEPSEEK_API_KEY", ""),
+                                             type="password",
+                                             help="**用途**：DeepSeek 平台的访问密钥\n\n[申请 DeepSeek API Key](https://platform.deepseek.com/api_keys)")
+        elif llm_provider == "通义千问(qwen)":
+            qwen_api_key = st.text_input("通义千问 API Key", value=user_config.get("QWEN_API_KEY", ""),
+                                         type="password",
+                                         help="**用途**：阿里云通义千问的访问密钥\n\n[申请 Qwen API Key](https://dashscope.aliyuncs.com/api/v1)")
+        elif llm_provider == "豆包(doubao)":
+            doubao_api_key = st.text_input("豆包 API Key", value=user_config.get("DOUBAO_API_KEY", ""),
+                                           type="password",
+                                           help="**用途**：豆包平台的访问密钥\n\n[申请 Doubao API Key](https://www.doubao.com/api/keys)")
+
+        deep_think_llm = st.text_input(
+            "复杂推理模型 (deep_think_llm)",
+            value=user_config.get("deep_think_llm", ""),
+            help="用于复杂推理和最终决策的强大模型（如 gpt-4o、deepseek-chat、qwen-max）"
+        )
+        quick_think_llm = st.text_input(
+            "快速处理模型 (quick_think_llm)",
+            value=user_config.get("quick_think_llm", ""),
+            help="用于数据处理和初步分析的快速、低成本模型（如 gpt-4o-mini、deepseek-coder、qwen-turbo）"
+        )
+        backend_url = st.text_input(
+            "模型基地址 (backend_url)",
+            value=user_config.get("backend_url", ""),
+            help="LLM 平台的 API 基地址（如 OpenAI: https://api.openai.com/v1，DeepSeek: https://api.deepseek.com/v1）"
+        )
+
     with st.expander("🛠️ 系统参数"):
         max_debate = st.slider("多空辩论轮数", 1, 5, user_config.get("max_debate_rounds", 2))
         max_risk = st.slider("风控辩论轮数", 1, 3, user_config.get("max_risk_discuss_rounds", 1))
@@ -218,11 +275,14 @@ with st.sidebar:
 
     if st.button("💾 保存所有设置", type="primary", use_container_width=True):
         new_config = {
-            "OPENAI_API_KEY": openai_key.strip(),
             "FINNHUB_API_KEY": finnhub_key.strip(),
             "TAVILY_API_KEY": tavily_key.strip(),
             "LANGSMITH_API_KEY": langsmith_key.strip(),
             "API_BASE": api_base.strip().rstrip("/"),  # 去除末尾斜杠
+            "llm_provider": llm_provider,
+            "deep_think_llm": deep_think_llm.strip(),
+            "quick_think_llm": quick_think_llm.strip(),
+            "backend_url": backend_url.strip().rstrip("/"),
             "proxy_enabled": proxy_enabled,
             "proxy_host": proxy_host.strip(),
             "proxy_port": proxy_port.strip(),
@@ -232,6 +292,17 @@ with st.sidebar:
             "online_tools": online_tools,
             "prompts": prompts
         }
+
+        # 根据选择的提供商保存对应的 API Key
+        if llm_provider == "ChatGPT(Openai)":
+            new_config["OPENAI_API_KEY"] = openai_api_key.strip()
+        elif llm_provider == "Deepseek":
+            new_config["DEEPSEEK_API_KEY"] = deepseek_api_key.strip()
+        elif llm_provider == "通义千问(qwen)":
+            new_config["QWEN_API_KEY"] = qwen_api_key.strip()
+        elif llm_provider == "豆包(doubao)":
+            new_config["DOUBAO_API_KEY"] = doubao_api_key.strip()
+
         save_config(new_config)
         st.success("✅ 设置已保存,正在应用新配置...")
         st.balloons()
