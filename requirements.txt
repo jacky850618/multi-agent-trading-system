@@ -1,8 +1,11 @@
 # LangChain and LangGraph core components
 langchain
 langgraph
+langchain_core
 langchain-openai
 langchain-community
+streamlit
+fastapi
 
 # Foundational libraries for data and LLMs
 openai
@@ -28,4 +31,3 @@ beautifulsoup4
 
 # For notebook-specific functionality and visualization
 ipython
-pygraphviz
