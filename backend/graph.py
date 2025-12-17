@@ -3,19 +3,19 @@ import functools
 
 from backend.config_user import get_user_config
 from langgraph.graph import StateGraph, END
-# 创建 StateGraph，将所有代理节点、工具节点、消息清理节点连接起来。
+# 创建 StateGraph，将所有智能体节点、工具节点、消息清理节点连接起来。
 # 定义条件路由逻辑（ConditionalLogic）：
 # 分析师是否需要继续调用工具（ReAct 循环）。
 # 多空辩论何时结束、转向经理。
 # 风控辩论的轮转顺序和结束条件。
 # 设置入口点、边（edges）和条件边，最终编译成可执行的 trading_graph。
-# 这是整个系统的“大脑”，控制代理协作的顺序和流转。
+# 这是整个系统的“大脑”，控制智能体协作的顺序和流转。
 
 from .agents import *
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import HumanMessage, RemoveMessage
-from models import AgentState
-from tools import Toolkit
+from .models import AgentState
+from .tools import Toolkit
 
 
 # ConditionalLogic 类包含我们图的路由函数。

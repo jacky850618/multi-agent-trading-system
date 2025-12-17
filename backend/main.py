@@ -419,7 +419,7 @@ if __name__ == "__main__":
     print("正在反思和更新风险管理者的记忆...")
     reflector.reflect(final_state, hypothetical_returns, risk_manager_memory, lambda s: s['final_trade_decision'])
 
-    # 用法示例：事后评估代理的信号是否正确
+    # 用法示例：事后评估智能体的信号是否正确
     ground_truth_report = evaluate_ground_truth(TICKER, TRADE_DATE, final_signal)
     print(ground_truth_report)
 
@@ -444,7 +444,7 @@ if __name__ == "__main__":
     print("----- LLM-as-a-Judge Evaluation Report -----")
     print(evaluation_result.dict())
 
-    # 用法示例：事后评估代理的信号是否正确
+    # 用法示例：事后评估智能体的信号是否正确
     ground_truth_report = evaluate_ground_truth(TICKER, TRADE_DATE, final_signal)
     print(ground_truth_report)
 
@@ -453,7 +453,7 @@ if __name__ == "__main__":
 
     raw_market_data_for_audit = toolkit.get_technical_indicators(TICKER, start_date_audit, TRADE_DATE)
 
-    # 为审计员准备输入资料（原始技术数据 + 代理人的叙述性报告）
+    # 为审计员准备输入资料（原始技术数据 + 智能体人的叙述性报告）
     audit_input = {
         "raw_data": raw_market_data_for_audit,
         "agent_report": final_state['market_report']

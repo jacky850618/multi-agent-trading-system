@@ -4,7 +4,7 @@
 import os
 from getpass import getpass
 
-def set_env(var: str):
+def _set_env(var: str):
     if not os.environ.get(var):
         os.environ[var] = getpass(f"请输入您的 {var}: ")
 

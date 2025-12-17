@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 import yfinance as yf
 from datetime import datetime, timedelta
-from agents import deep_thinking_llm
+from .agents import deep_thinking_llm
 
 
 # 从最终自然语言决策中提取干净的 BUY/SELL/HOLD 信号
@@ -21,7 +21,7 @@ class SignalProcessor:
     def process_signal(self, full_signal: str) -> str:
         messages = [
             ("system",
-             "You are an assistant designed to extract the final investment decision: SELL, BUY, or HOLD from a financial report. Respond with only the single-word decision."),
+             "您是一个助手，旨在从财务报告中提取最终的投资决策：SELL,BUY或HOLD。请仅以一个词来回答该决策。"),
             ("human", full_signal),
         ]
         result = self.llm.invoke(messages).content.strip().upper()
@@ -36,13 +36,13 @@ class Reflector:
 
     def __init__(self, llm):
         self.llm = llm
-        self.reflection_prompt = """You are an expert financial analyst. Review the trading decision/analysis, the market context, and the financial outcome.
-        - First, determine if the decision was correct or incorrect based on the outcome.
-        - Analyze the most critical factors that led to the success or failure.
-        - Finally, formulate a concise, one-sentence lesson or heuristic that can be used to improve future decisions in similar situations.
+        self.reflection_prompt = """您是一位资深的金融分析师。请回顾交易决策/分析、市场背景以及最终的财务结果。
+        - 首先，根据结果判断决策是否正确。
+        - 分析导致成功或失败的关键因素。
+        - 最后，总结出一条简洁明了的经验教训或启发式方法，以便在类似情况下改进未来的决策。
 
-        Market Context & Analysis: {situation}
-        Outcome (Profit/Loss): {returns_losses}"""
+        市场背景及分析： {situation}
+        结果（盈利/亏损）： {returns_losses}"""
 
     def reflect(self, current_state, returns_losses, memory, component_key_func):
         situation = f"Reports: {current_state['market_report']} {current_state['sentiment_report']} {current_state['news_report']} {current_state['fundamentals_report']}\nDecision/Analysis Text: {component_key_func(current_state)}"

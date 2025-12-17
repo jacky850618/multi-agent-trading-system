@@ -1,5 +1,5 @@
 # 定义系统所有外部数据获取工具。
-# 这些工具是分析师实现 ReAct（Reasoning + Acting）循环的核心，允许代理在需要时调用真实世界数据。
+# 这些工具是分析师实现 ReAct（Reasoning + Acting）循环的核心，允许智能体在需要时调用真实世界数据。
 
 import os
 from typing import Annotated

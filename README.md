@@ -52,7 +52,7 @@
 ```
 
 # 启动后端
-uvicorn backend.api:app --reload --port 8000
+uvicorn backend.api:app --reload --port 8001
 
 # 启动前端
 streamlit run frontend/app.py

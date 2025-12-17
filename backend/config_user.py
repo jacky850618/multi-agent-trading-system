@@ -10,10 +10,10 @@ DEFAULT_USER_CONFIG = {
     "FINNHUB_API_KEY": "",
     "TAVILY_API_KEY": "",
     "LANGSMITH_API_KEY": "",
-    "max_debate_rounds": 2,# 牛市与熊市的辩论将进行2轮。
-    "max_risk_discuss_rounds": 1,# 风险团队进行1轮辩论。
-    "max_recur_limit": 100,   # 智能体循环的安全限制。
-    "online_tools": True, # 使用实时 API；设置为 False 可使用缓存数据以更快、更便宜地运行。
+    "max_debate_rounds": 2,  # 牛市与熊市的辩论将进行2轮。
+    "max_risk_discuss_rounds": 1,  # 风险团队进行1轮辩论。
+    "max_recur_limit": 100,  # 智能体循环的安全限制。
+    "online_tools": True,  # 使用实时 API；设置为 False 可使用缓存数据以更快、更便宜地运行。
     "prompts": {
         "bull": "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。",
         "bear": "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。",
@@ -28,6 +28,10 @@ DEFAULT_USER_CONFIG = {
 }
 
 
+def set_env(config: Dict[str, Any], key: str):
+    os.environ[key] = config[key]
+
+
 def load_user_config() -> Dict[str, Any]:
     """加载用户自定义配置，如果文件不存在返回默认"""
     if os.path.exists(CONFIG_USER_FILE):
@@ -36,6 +40,12 @@ def load_user_config() -> Dict[str, Any]:
                 user_config = json.load(f)
             # 合并默认值，确保新字段不会缺失
             config = {**DEFAULT_USER_CONFIG, **user_config}
+
+            set_env(config, "OPENAI_API_KEY")
+            set_env(config, "FINNHUB_API_KEY")
+            set_env(config, "TAVILY_API_KEY")
+            set_env(config, "LANGSMITH_API_KEY")
+
             # 确保 prompts 完整
             config["prompts"] = {**DEFAULT_USER_CONFIG["prompts"], **user_config.get("prompts", {})}
             return config
@@ -46,6 +56,7 @@ def load_user_config() -> Dict[str, Any]:
 
 # 全局配置（后端启动时加载一次）
 USER_CONFIG = load_user_config()
+
 
 # 提供获取函数，便于其他模块导入
 def get_user_config() -> Dict[str, Any]:

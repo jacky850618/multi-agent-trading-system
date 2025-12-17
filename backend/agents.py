@@ -1,5 +1,5 @@
-# 定义所有智能代理（Agent）的逻辑和节点函数。
-# 包含创建各种代理的工厂函数：
+# 定义所有智能智能体（Agent）的逻辑和节点函数。
+# 包含创建各种智能体的工厂函数：
 # 四个分析师（市场、社交媒体、新闻、基本面）。
 # 多空研究员（Bull/Bear Researcher）。
 # 研究员主管（Research Manager）。
@@ -7,13 +7,13 @@
 # 风控三方辩手（Risky/Safe/Neutral Analyst）。
 # 风控经理/最终决策者（Risk Manager）。
 #
-# 每个代理使用特定的 Prompt + LLM + 工具/记忆，实现其专业角色和决策行为。
+# 每个智能体使用特定的 Prompt + LLM + 工具/记忆，实现其专业角色和决策行为。
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from .config_sys import CONFIG_SYS
-from models import AgentState
-from memory import FinancialSituationMemory
+from .models import AgentState
+from .memory import FinancialSituationMemory
 
 # 初始化功能强大的 LLM，用于高风险推理任务。
 deep_thinking_llm = ChatOpenAI(
@@ -55,10 +55,21 @@ def create_analyst_node(llm, toolkit, system_message, tools, output_field):
     prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
     chain = prompt | llm.bind_tools(tools)
 
-    def analyst_node(state: AgentState) -> dict:
-        prompt_with_data = prompt.partial(current_date=state["trade_date"], ticker=state["company_of_interest"])
-        result = prompt_with_data.invoke(state["messages"])
-        report = "" if result.tool_calls else result.content
+    def analyst_node(state: AgentState):
+        # 传入完整的消息历史 + 动态变量
+        result = chain.invoke({
+            "messages": state["messages"],
+            "current_date": state["trade_date"],
+            "ticker": state["company_of_interest"]
+        })
+
+        # 现在 result 是 AIMessage，才有 tool_calls 属性
+        report = ""
+        if hasattr(result, "tool_calls") and result.tool_calls:
+            report = ""  # 有 tool_calls，继续 ReAct 循环，不生成报告
+        else:
+            report = result.content  # 最终回答，生成报告
+
         return {"messages": [result], output_field: report}
 
     return analyst_node

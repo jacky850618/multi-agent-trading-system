@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
     "FINNHUB_API_KEY": "",
     "TAVILY_API_KEY": "",
     "LANGSMITH_API_KEY": "",
+    "API_BASE": "http://127.0.0.1:8000",
     "max_debate_rounds": 2,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
@@ -57,7 +58,12 @@ def is_configured(config):
     return all(config.get(key, "").strip() != "" for key in required)
 
 
-API_BASE = "http://127.0.0.1:8000"  # 部署时改成您的后端地址
+st.set_page_config(
+    page_title="深度思考股票分析系统",  # 浏览器标签页标题
+    page_icon="🧠",  # 图标
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.title("🧠 深度思考股票分析系统")
 st.info("请输入股票代码和交易日期，然后点击 **开始深度分析** 按钮")
@@ -68,6 +74,13 @@ user_config = load_config()
 # ========================== 侧边栏设置面板 ==========================
 with st.sidebar:
     st.header("⚙️ 系统设置")
+
+    with st.expander("🌐 后端服务地址"):
+        api_base = st.text_input(
+            "后端 FastAPI 服务地址（API_BASE）",
+            value=user_config.get("API_BASE", DEFAULT_CONFIG["API_BASE"]),
+            help="后端服务地址，例如：http://127.0.0.1:8000 或 https://your-domain.com"
+        )
 
     with st.expander("🔑 API Keys（必须填写）", expanded=not is_configured(user_config)):
         openai_key = st.text_input(
@@ -102,7 +115,7 @@ with st.sidebar:
             value=user_config.get("LANGSMITH_API_KEY", ""),
             type="password",
             help=(
-                "**用途**：用于 LangSmith 追踪和调试代理链路（可视化每个智能体的调用过程），非必需，但强烈推荐开启以便调试。\n\n"
+                "**用途**：用于 LangSmith 追踪和调试智能体链路（可视化每个智能体的调用过程），非必需，但强烈推荐开启以便调试。\n\n"
                 "[申请 LangSmith API Key](https://smith.langchain.com/settings/api-keys)"
             )
         )
@@ -116,11 +129,11 @@ with st.sidebar:
     with st.expander("✍️ 智能体提示词自定义"):
         prompts = user_config.get("prompts", DEFAULT_CONFIG["prompts"]).copy()
         for key, label in [
-            ("bull", "多头研究员"),
-            ("bear", "空头研究员"),
-            ("risky", "激进风控"),
-            ("safe", "保守风控"),
-            ("neutral", "中立风控"),
+            ("bull", "多头分析员"),
+            ("bear", "空头分析员"),
+            ("risky", "激进风控研究员"),
+            ("safe", "稳健风控研究员"),
+            ("neutral", "平衡风控研究员"),
             ("market_analyst", "市场分析师"),
             ("social_analyst", "社交媒体分析师"),
             ("news_analyst", "新闻分析师"),
@@ -135,6 +148,7 @@ with st.sidebar:
             "FINNHUB_API_KEY": finnhub_key.strip(),
             "TAVILY_API_KEY": tavily_key.strip(),
             "LANGSMITH_API_KEY": langsmith_key.strip(),
+            "API_BASE": api_base.strip().rstrip("/"),  # 去除末尾斜杠
             "max_debate_rounds": max_debate,
             "max_risk_discuss_rounds": max_risk,
             "max_recur_limit": max_recur,
@@ -165,13 +179,14 @@ with col1:
 with col2:
     trade_date_input = st.date_input(
         "交易日期",
-        value=datetime.date.today() - timedelta(days=2)
+        value=datetime.now().date() - timedelta(days=2)
     )
 trade_date = trade_date_input.strftime('%Y-%m-%d')
 
 if st.button("🚀 开始深度分析", type="primary", use_container_width=True):
     st.info("正在提交分析任务...")
-    resp = requests.post(f"{API_BASE}/start", json={"ticker": ticker, "trade_date": trade_date.strftime('%Y-%m-%d')})
+    api_base = user_config["API_BASE"]
+    resp = requests.post(f"{api_base}/start", json={"ticker": ticker, "trade_date": trade_date})
     if resp.status_code != 200:
         st.error("后端服务不可用")
     else:
@@ -184,7 +199,7 @@ if st.button("🚀 开始深度分析", type="primary", use_container_width=True
 
         logs = []
         while True:
-            status_resp = requests.get(f"{API_BASE}/status/{task_id}")
+            status_resp = requests.get(f"{api_base}/status/{task_id}")
             if status_resp.status_code == 200:
                 data = status_resp.json()
                 new_logs = data["logs"]
@@ -231,7 +246,7 @@ st.markdown("""
     ### 🔍 多维度质量评估
     - **LLM-as-a-Judge**：大模型评分决策的逻辑性、证据支持和可执行性。
     - **真实市场验证**：对比实际股价表现评估信号正确性。
-    - **事实一致性审计**：防止代理“幻觉”，确保报告与数据源一致。
+    - **事实一致性审计**：防止智能体“幻觉”，确保报告与数据源一致。
     
     ### 📊 支持的市场
     | 市场          | 支持程度 | 示例代码                  | 推荐度    | 说明                                      |
