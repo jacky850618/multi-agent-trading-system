@@ -350,21 +350,26 @@ if st.button("🚀 开始深度分析", type="primary", use_container_width=True
             status_resp = requests.get(f"{api_base}/status/{task_id}")
             if status_resp.status_code == 200:
                 data = status_resp.json()
-                new_logs = data["logs"]
-                if new_logs != logs[-len(new_logs):] if logs else True:
+                # 防御性获取字段，避免后端未包含某些键导致前端崩溃
+                new_logs = data.get("logs", []) or []
+                if new_logs != logs:
                     logs = new_logs
                     log_placeholder.text_area("实时分析日志", "\n".join(logs), height=600)
 
-                if data["status"] == "completed":
-                    result = data["final_result"]
+                status = data.get("status")
+                if status == "completed":
+                    result = data.get("final_result", {}) or {}
+                    signal = result.get('signal') if isinstance(result, dict) else None
                     st.balloons()
-                    st.success(f"最终信号：**{result['signal']}**")
+                    st.success(f"最终信号：**{signal}**")
                     st.markdown("### 最终决策")
-                    st.markdown(result["decision"])
+                    st.markdown(result.get("decision", ""))
                     st.download_button("下载日志", "\n".join(logs), f"analysis_{ticker}.txt")
                     break
-                elif data["status"] == "error":
-                    st.error("分析失败")
+                elif status == "error":
+                    # 显示后端返回的错误信息（如果有）
+                    err = data.get("error") or data.get("message") or "分析失败"
+                    st.error(f"分析失败: {err}")
                     break
                 else:
                     progress.progress(min(len(logs) / 25, 0.95))

@@ -52,19 +52,19 @@ class Reflector:
 
 
 class Evaluation(BaseModel):
-    reasoning_quality: int = Field(description="Score 1-10 on the coherence and logic.")
-    evidence_based_score: int = Field(description="Score 1-10 on citation of evidence from reports.")
-    actionability_score: int = Field(description="Score 1-10 on how clear and actionable the decision is.")
-    justification: str = Field(description="A brief justification for the scores.")
+    reasoning_quality: int = Field(description="逻辑性和连贯性评分1-10分。")
+    evidence_based_score: int = Field(description="根据报告中证据的引用情况，评分范围为1-10分。")
+    actionability_score: int = Field(description="1-10分，评价该决策的清晰度和可操作性。")
+    justification: str = Field(description="对评分的简要说明。")
 
 
 # 为评估模型创建一个提示模板。
 # 该提示指示 LLM 像财务审计员一样工作。
 evaluator_prompt = ChatPromptTemplate.from_template(
-    """You are an expert financial auditor. Evaluate the 'Final Trading Decision' based on the provided 'Analyst Reports'.
-    Analyst Reports:
+    """您是一位资深的财务审计师。请根据所提供的“分析师报告”评估“最终交易决策”。
+    分析师报告: 
     {reports}
-    Final Trading Decision to Evaluate:
+    最终交易决策评估:
     {final_decision}
     """
 )
@@ -80,6 +80,9 @@ def evaluate_ground_truth(ticker, trade_date, signal):
         from datetime import datetime, timedelta
 
         start_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        # If the trade_date is in the future, skip evaluation
+        if start_date >= datetime.now().date():
+            return f"Ground truth unavailable: trade_date {trade_date} is in the future or today."
         # Try a longer window to ensure we can find 5 trading days (markets have weekends/holidays)
         end_date = start_date + timedelta(days=14)
 
@@ -98,7 +101,7 @@ def evaluate_ground_truth(ticker, trade_date, signal):
         while data.index[first_trading_day_index].date() < start_date:
             first_trading_day_index += 1
             if first_trading_day_index >= len(data) - 5:
-                return "Could not align trade date."
+                return "无法匹配交易日期。"
 
         open_price = data['Open'].iloc[first_trading_day_index]
         close_price_5_days_later = data['Close'].iloc[first_trading_day_index + 4]
@@ -113,30 +116,30 @@ def evaluate_ground_truth(ticker, trade_date, signal):
 
         return (
             f"----- Ground Truth Evaluation Report -----\n"
-            f"Agent Signal: {signal} on {trade_date}\n"
-            f"Opening Price on {data.index[first_trading_day_index].strftime('%Y-%m-%d')}: ${open_price:.2f}\n"
-            f"Closing Price 5 days later ({data.index[first_trading_day_index + 4].strftime('%Y-%m-%d')}): ${close_price_5_days_later:.2f}\n"
-            f"Actual Market Performance: {performance:+.2f}%\n"
-            f"Evaluation Result: {result}"
+            f"智能体信号: {trade_date} {signal} \n"
+            f"{data.index[first_trading_day_index].strftime('%Y-%m-%d')} 的开盘价:${open_price:.2f}\n"
+            f"({data.index[first_trading_day_index + 4].strftime('%Y-%m-%d')}) 5天后收盘价: ${close_price_5_days_later:.2f}\n"
+            f"实际市场表现: {performance:+.2f}%\n"
+            f"评估结果: {result}"
         )
     except Exception as e:
         return f"Ground truth evaluation failed: {e}"
 
 
 class Audit(BaseModel):
-    is_consistent: bool = Field(description="Whether the report is factually consistent with the data.")
-    discrepancies: list[str] = Field(description="A list of any identified discrepancies.")
-    justification: str = Field(description="A brief justification for the audit result.")
+    is_consistent: bool = Field(description="报告内容是否与数据相符。")
+    discrepancies: list[str] = Field(description="列出所有已发现的差异。")
+    justification: str = Field(description="对审计结果的简要说明。")
 
 
 auditor_prompt = ChatPromptTemplate.from_template(
-    """You are an auditor. Compare the 'Agent Report' against the 'Raw Data' and check for factual consistency.
-    Ignore differences in formatting or summarization, but flag any direct contradictions or claims in the report that are not supported by the data.
+    """您是一名审计员。请将“代理报告”与“原始数据”进行比较，并检查事实一致性。
+忽略格式或汇总方式的差异，但请标记报告中任何直接矛盾之处或数据不支持的说法。
 
-    Raw Data:
+    原始数据:
     {raw_data}
 
-    Agent Report to Audit:
+    智能体审计报告:
     {agent_report}
     """
 )

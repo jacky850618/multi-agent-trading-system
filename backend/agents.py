@@ -105,8 +105,16 @@ def create_analyst_node(llm, toolkit, system_message, tools, output_field):
         # 只更新报告字段，不污染全局 messages
         update = {output_field: report}
 
-        # 保留 messages 用于工具调用循环，但不传递给下一个分析师
-        update["messages"] = state["messages"] + [result]
+        # 保留 messages 用于工具调用循环，但限制历史长度以防止无限增长导致路由护栏触发
+        try:
+            existing = list(state.get("messages", []))
+        except Exception:
+            existing = []
+        # 保留最近的若干消息（包括即将添加的 result），避免无限增长
+        MAX_MESSAGES = 6
+        if len(existing) >= MAX_MESSAGES - 1:
+            existing = existing[-(MAX_MESSAGES - 1):]
+        update["messages"] = existing + [result]
 
         return update
 
