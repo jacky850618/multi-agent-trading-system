@@ -3,17 +3,17 @@
 
 import chromadb
 from openai import OpenAI
-
+from config_sys import CONFIG_SYS
 # 将过去的交易情境 + 经验教训（reflection）存储为向量。
 # 在类似情境下检索历史经验，供智能体（如多空分析师、风控经理）参考，避免重复错误。
 # 每个关键代理（如 Bull、Bear、Trader、Risk Manager）都会有自己的记忆实例
 
 class FinancialSituationMemory:
-    def __init__(self, name, config):
+    def __init__(self, name):
         # 使用 OpenAI 的小型嵌入模型对文本进行向量化
         self.embedding_model = "text-embedding-3-small"
         # 初始化 OpenAI 客户端（指向您配置的后端）
-        self.client = OpenAI(base_url=config["backend_url"])
+        self.client = OpenAI(base_url=CONFIG_SYS["backend_url"])
         # 创建一个 ChromaDB 客户端（允许重置以进行测试）
         self.chroma_client = chromadb.Client(chromadb.config.Settings(allow_reset=True))
         # 创建一个集合（类似于表格）来存储情境和建议

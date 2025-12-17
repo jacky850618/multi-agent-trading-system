@@ -88,8 +88,7 @@ def get_macroeconomic_news(trade_date: str) -> str:
 
 # --- Toolkit Class ---
 class Toolkit:
-    def __init__(self, config):
-        self.config = config
+    def __init__(self):
         self.get_yfinance_data = get_yfinance_data
         self.get_technical_indicators = get_technical_indicators
         self.get_finnhub_news = get_finnhub_news

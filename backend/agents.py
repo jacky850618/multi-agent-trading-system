@@ -11,21 +11,21 @@
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from .config import CONFIG
+from .config_sys import CONFIG_SYS
 from models import AgentState
 from memory import FinancialSituationMemory
 
 # 初始化功能强大的 LLM，用于高风险推理任务。
 deep_thinking_llm = ChatOpenAI(
-    model=CONFIG["deep_think_llm"],
-    base_url=CONFIG["backend_url"],
+    model=CONFIG_SYS["deep_think_llm"],
+    base_url=CONFIG_SYS["backend_url"],
     temperature=0.1
 )
 
 # 初始化速度更快、成本更低的 LLM，用于常规数据处理。
 quick_thinking_llm = ChatOpenAI(
-    model=CONFIG["quick_think_llm"],
-    base_url=CONFIG["backend_url"],
+    model=CONFIG_SYS["quick_think_llm"],
+    base_url=CONFIG_SYS["backend_url"],
     temperature=0.1
 )
 

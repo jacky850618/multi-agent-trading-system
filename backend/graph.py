@@ -1,6 +1,7 @@
 # 构建并编译完整的 LangGraph 工作流（核心调度引擎）。
 import functools
 
+from backend.config_user import get_user_config
 from langgraph.graph import StateGraph, END
 # 创建 StateGraph，将所有代理节点、工具节点、消息清理节点连接起来。
 # 定义条件路由逻辑（ConditionalLogic）：
@@ -54,149 +55,122 @@ def create_msg_delete():
         # 我们使用RemoveMessage来指定要删除的消息。
         # 在这里，我们删除所有现有消息，并添加一条新的 HumanMessage 以继续流程。
         return {"messages": [RemoveMessage(id=m.id) for m in state["messages"]] + [HumanMessage(content="Continue")]}
+
     return delete_messages
 
 
+# ==================== 核心工厂函数：为每个任务创建独立的 graph ====================
+def create_trading_graph():
+    """
+        为每个并发任务创建一个全新的、独立的 trading_graph
+        所有 toolkit、memory、节点都是独立的，避免状态污染
+        """
+    # 每个任务独立的工具包
+    user_config = get_user_config()
+    prompts = user_config["prompts"]
 
-toolkit = Toolkit(CONFIG)
-print(f"定义并实例化了包含实时数据工具的工具包类。")
+    toolkit = Toolkit()
+    print(f"定义并实例化了包含实时数据工具的工具包类。")
 
+    # 每个任务独立的记忆（关键！）
+    memories = {
+        "bull": FinancialSituationMemory(f"bull_memory_{id(toolkit)}"),  # 用唯一标识避免冲突
+        "bear": FinancialSituationMemory(f"bear_memory_{id(toolkit)}"),
+        "trader": FinancialSituationMemory(f"trader_memory_{id(toolkit)}"),
+        "invest_judge": FinancialSituationMemory(f"invest_judge_memory_{id(toolkit)}"),
+        "risk_manager": FinancialSituationMemory(f"risk_manager_memory_{id(toolkit)}"),
+    }
 
-all_tools = [
-    toolkit.get_yfinance_data,
-    toolkit.get_technical_indicators,
-    toolkit.get_finnhub_news,
-    toolkit.get_social_media_sentiment,
-    toolkit.get_fundamental_analysis,
-    toolkit.get_macroeconomic_news
-]
-tool_node = ToolNode(all_tools)
+    # 独立的工具节点
+    all_tools = [
+        toolkit.get_yfinance_data,
+        toolkit.get_technical_indicators,
+        toolkit.get_finnhub_news,
+        toolkit.get_social_media_sentiment,
+        toolkit.get_fundamental_analysis,
+        toolkit.get_macroeconomic_news
+    ]
+    tool_node = ToolNode(all_tools)
 
-# 市场分析师：专注于技术指标和价格走势。
-market_analyst_system_message = "您是一位专门分析金融市场的交易助理。您的职责是选择最相关的技术指标来分析股票的价格走势、动量和波动性。您必须使用工具获取历史数据，然后生成一份包含分析结果的报告，其中包括一个汇总表。"
-market_analyst_node = create_analyst_node(
-    quick_thinking_llm,
-    toolkit,
-    market_analyst_system_message,
-    [toolkit.get_yfinance_data, toolkit.get_technical_indicators],
-    "market_report"
-)
+    # 独立的分析师节点
+    market_analyst_node = create_analyst_node(
+        quick_thinking_llm, toolkit,
+        prompts["market_analyst"],
+        [toolkit.get_yfinance_data, toolkit.get_technical_indicators],
+        "market_report"
+    )
+    social_analyst_node = create_analyst_node(
+        quick_thinking_llm, toolkit,
+        prompts["social_analyst"],
+        [toolkit.get_social_media_sentiment],
+        "sentiment_report"
+    )
+    news_analyst_node = create_analyst_node(
+        quick_thinking_llm, toolkit,
+        prompts["news_analyst"],
+        [toolkit.get_finnhub_news, toolkit.get_macroeconomic_news],
+        "news_report"
+    )
+    fundamentals_analyst_node = create_analyst_node(
+        quick_thinking_llm, toolkit,
+        prompts["fundamentals_analyst"],
+        [toolkit.get_fundamental_analysis],
+        "fundamentals_report"
+    )
 
-# 社交媒体分析师：评估公众情绪。
-social_analyst_system_message = "您是一名社交媒体分析师。您的工作是分析过去一周内特定公司的社交媒体帖子和公众情绪。使用您的工具查找相关讨论，并撰写一份全面的报告，详细说明您的分析、见解以及对交易者的影响，包括一份汇总表。"
-social_analyst_node = create_analyst_node(
-    quick_thinking_llm,
-    toolkit,
-    social_analyst_system_message,
-    [toolkit.get_social_media_sentiment],
-    "sentiment_report"
-)
+    # 独立的消息清理节点
+    msg_clear_node = create_msg_delete()
 
-# 新闻分析师：负责公司相关新闻和宏观经济新闻。
-news_analyst_system_message = "您是一名新闻研究员，负责分析过去一周的最新新闻和趋势。请撰写一份关于当前世界形势的综合报告，内容需与交易和宏观经济相关。请使用您的工具提供全面、详细的分析，包括汇总表。"
-news_analyst_node = create_analyst_node(
-    quick_thinking_llm,
-    toolkit,
-    news_analyst_system_message,
-    [toolkit.get_finnhub_news, toolkit.get_macroeconomic_news],
-    "news_report"
-)
+    # 独立的研究员节点
+    bull_researcher_node = create_researcher_node(quick_thinking_llm,
+                                                  memories["bull"],
+                                                  prompts["bull"],
+                                                  "Bull Analyst")
+    bear_researcher_node = create_researcher_node(quick_thinking_llm, memories["bear"],
+                                                  prompts["bear"],
+                                                  "Bear Analyst")
+    research_manager_node = create_research_manager(deep_thinking_llm, memories["invest_judge"])
 
-# 基本面分析师：深入分析公司的财务状况。
-fundamentals_analyst_system_message = "您是一名研究员，正在分析公司的基本面信息。请撰写一份关于公司财务状况、内部人士情绪和交易情况的综合报告，以全面了解其基本面状况，并附上汇总表。"
-fundamentals_analyst_node = create_analyst_node(
-    quick_thinking_llm,
-    toolkit,
-    fundamentals_analyst_system_message,
-    [toolkit.get_fundamental_analysis],
-    "fundamentals_report"
-)
+    # 独立的交易员和风控节点
+    trader_node = functools.partial(create_trader(quick_thinking_llm, memories["trader"]), name="Trader")
+    risky_node = create_risk_debator(quick_thinking_llm, prompts["risky"],
+                                     "Risky Analyst")
+    safe_node = create_risk_debator(quick_thinking_llm, prompts["safe"],
+                                    "Safe Analyst")
+    neutral_node = create_risk_debator(quick_thinking_llm, prompts["neutral"],
+                                       "Neutral Analyst")
+    risk_manager_node = create_risk_manager(deep_thinking_llm, memories["risk_manager"])
 
-# 创建可调用的消息清除节点。
-msg_clear_node = create_msg_delete()
+    # 独立的条件逻辑
+    conditional_logic = ConditionalLogic(
+        max_debate_rounds=user_config['max_debate_rounds'],
+        max_risk_discuss_rounds=user_config['max_risk_discuss_rounds']
+    )
 
-
-# 为每个学习的智能体创建一个专用的内存实例。
-bull_memory = FinancialSituationMemory("bull_memory", CONFIG)
-bear_memory = FinancialSituationMemory("bear_memory", CONFIG)
-trader_memory = FinancialSituationMemory("trader_memory", CONFIG)
-invest_judge_memory = FinancialSituationMemory("invest_judge_memory", CONFIG)
-risk_manager_memory = FinancialSituationMemory("risk_manager_memory", CONFIG)
-
-# 研究员
-# 多头/空头研究员
-bull_prompt = "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。"
-bear_prompt = "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。"
-
-# 使用我们的工厂函数创建可调用节点。
-bull_researcher_node = create_researcher_node(quick_thinking_llm, bull_memory, bull_prompt, "Bull Analyst")
-bear_researcher_node = create_researcher_node(quick_thinking_llm, bear_memory, bear_prompt, "Bear Analyst")
-
-# 创建可调用的研究员主管节点。
-research_manager_node = create_research_manager(deep_thinking_llm, invest_judge_memory)
-print("研究员和研究员主管智能体创建功能现已可用。")
-
-# 创建交易者节点。我们使用 functools.partial 预先填充 'name' 参数。
-trader_node_func = create_trader(quick_thinking_llm, trader_memory)
-trader_node = functools.partial(trader_node_func, name="Trader")
-
-# “冒险型”风险分析师主张最大化收益，即使这意味着更高的风险。
-risky_prompt = "您是冒险型风险分析师。您主张高回报机会和大胆策略。"
-
-# “稳健型”风险分析师将资本保值放在首位。
-safe_prompt = "您是稳健 / 保守型风险分析师。您优先考虑资本保值和最小化波动性。"
-
-# “平衡型”风险分析师提供平衡、客观的视角。
-neutral_prompt = "您是平衡型风险分析师。您提供平衡的视角，权衡收益和风险。"
-
-# 使用各自的提示创建三个风险辩论者节点。
-risky_node = create_risk_debator(quick_thinking_llm, risky_prompt, "Risky Analyst")
-safe_node = create_risk_debator(quick_thinking_llm, safe_prompt, "Safe Analyst")
-neutral_node = create_risk_debator(quick_thinking_llm, neutral_prompt, "Neutral Analyst")
-
-# 创建可调用的投资组合经理节点。
-risk_manager_node = create_risk_manager(deep_thinking_llm, risk_manager_memory)
-
-# 使用中央配置中的值实例化逻辑类。
-conditional_logic = ConditionalLogic(
-    max_debate_rounds=CONFIG['max_debate_rounds'],
-    max_risk_discuss_rounds=CONFIG['max_risk_discuss_rounds']
-)
-
-def build_workflow():
-    # 使用我们的主 AgentState 初始化一个新的 StateGraph。
+    # 构建 workflow
     workflow = StateGraph(AgentState)
 
-    # --- 将所有节点添加到图中 ---
-    # 添加分析师团队节点
+    # 添加节点
     workflow.add_node("Market Analyst", market_analyst_node)
     workflow.add_node("Social Analyst", social_analyst_node)
     workflow.add_node("News Analyst", news_analyst_node)
     workflow.add_node("Fundamentals Analyst", fundamentals_analyst_node)
     workflow.add_node("tools", tool_node)
     workflow.add_node("Msg Clear", msg_clear_node)
-
-    # 添加研究员团队节点
     workflow.add_node("Bull Researcher", bull_researcher_node)
     workflow.add_node("Bear Researcher", bear_researcher_node)
     workflow.add_node("Research Manager", research_manager_node)
-
-    # 添加交易员和风险团队节点
     workflow.add_node("Trader", trader_node)
     workflow.add_node("Risky Analyst", risky_node)
     workflow.add_node("Safe Analyst", safe_node)
     workflow.add_node("Neutral Analyst", neutral_node)
     workflow.add_node("Risk Judge", risk_manager_node)
 
-    # --- 使用边将节点连接起来 ---
-    # 设置整个工作流的入口点。
+    # 设置入口和边（与原逻辑完全一致）
     workflow.set_entry_point("Market Analyst")
-
-    # 定义分析师团队的顺序流程和 ReAct 循环。
     workflow.add_conditional_edges("Market Analyst", conditional_logic.should_continue_analyst,
                                    {"tools": "tools", "continue": "Msg Clear"})
-    workflow.add_edge("tools",
-                      "Market Analyst")  # After a tool call, loop back to the analyst for it to reason about the new data.
+    workflow.add_edge("tools", "Market Analyst")
     workflow.add_edge("Msg Clear", "Social Analyst")
     workflow.add_conditional_edges("Social Analyst", conditional_logic.should_continue_analyst,
                                    {"tools": "tools", "continue": "News Analyst"})
@@ -208,34 +182,26 @@ def build_workflow():
                                    {"tools": "tools", "continue": "Bull Researcher"})
     workflow.add_edge("tools", "Fundamentals Analyst")
 
-    # 定义研究员辩论循环。
     workflow.add_conditional_edges("Bull Researcher", conditional_logic.should_continue_debate)
     workflow.add_conditional_edges("Bear Researcher", conditional_logic.should_continue_debate)
     workflow.add_edge("Research Manager", "Trader")
 
-    # 定义风险辩论循环。
     workflow.add_edge("Trader", "Risky Analyst")
     workflow.add_conditional_edges("Risky Analyst", conditional_logic.should_continue_risk_analysis)
     workflow.add_conditional_edges("Safe Analyst", conditional_logic.should_continue_risk_analysis)
     workflow.add_conditional_edges("Neutral Analyst", conditional_logic.should_continue_risk_analysis)
-
-    # 定义到工作流末尾的最终边。
     workflow.add_edge("Risk Judge", END)
 
-    return workflow
+    return workflow.compile()
 
-def draw_workflow(graph):
+
+def draw_trading_graph(trading_graph):
     # 要进行可视化，需要安装 pygraphviz：`pip install pygraphviz`
     try:
         from IPython.display import Image, display
-
         # `get_graph()` 方法返回图表结构的表示。
         # `draw_png()` 方法将此结构渲染为 PNG 图像。
-        png_image = graph.get_graph().draw_png()
+        png_image = trading_graph.get_graph().draw_png()
         return Image(png_image)
     except Exception as e:
         print(f"Graph visualization failed: {e}. Please ensure pygraphviz is installed.")
-
-trading_workflow = build_workflow()
-trading_graph = trading_workflow.compile()
-print("Graph compiled successfully.")

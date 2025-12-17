@@ -2,20 +2,175 @@
 import streamlit as st
 import requests
 import time
-import datetime
+from datetime import datetime, timedelta
+import os
+import json
+
+# ========================== 默认配置 ==========================
+DEFAULT_CONFIG = {
+    "OPENAI_API_KEY": "",
+    "FINNHUB_API_KEY": "",
+    "TAVILY_API_KEY": "",
+    "LANGSMITH_API_KEY": "",
+    "max_debate_rounds": 2,
+    "max_risk_discuss_rounds": 1,
+    "max_recur_limit": 100,
+    "online_tools": True,
+    "prompts": {
+        "bull": "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。",
+        "bear": "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。",
+        "risky": "您是冒险型风险分析师。您主张高回报机会和大胆策略。",
+        "safe": "您是稳健 / 保守型风险分析师。您优先考虑资本保值和最小化波动性。",
+        "neutral": "您是平衡型风险分析师。您提供平衡的视角，权衡收益和风险。",
+        "market_analyst": "您是一位专门分析金融市场的交易助理。您的职责是选择最相关的技术指标来分析股票的价格走势、动量和波动性。您必须使用工具获取历史数据，然后生成一份包含分析结果的报告，其中包括一个汇总表。",
+        "social_analyst": "您是一名社交媒体分析师。您的工作是分析过去一周内特定公司的社交媒体帖子和公众情绪。使用您的工具查找相关讨论，并撰写一份全面的报告，详细说明您的分析、见解以及对交易者的影响，包括一份汇总表。",
+        "news_analyst": "您是一名新闻研究员，负责分析过去一周的最新新闻和趋势。请撰写一份关于当前世界形势的综合报告，内容需与交易和宏观经济相关。请使用您的工具提供全面、详细的分析，包括汇总表。",
+        "fundamentals_analyst": "您是一名研究员，正在分析公司的基本面信息。请撰写一份关于公司财务状况、内部人士情绪和交易情况的综合报告，以全面了解其基本面状况，并附上汇总表。"
+    }
+}
+
+CONFIG_FILE = "config_user.json"
+
+
+# ========================== 配置加载与保存 ==========================
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # 合并默认值，确保新增字段不会缺失
+            config = {**DEFAULT_CONFIG, **data}
+            config["prompts"] = {**DEFAULT_CONFIG["prompts"], **data.get("prompts", {})}
+            return config
+        except Exception as e:
+            st.error(f"配置文件加载失败，将使用默认配置: {e}")
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(config):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4, ensure_ascii=False)
+
+
+def is_configured(config):
+    required = ["OPENAI_API_KEY", "FINNHUB_API_KEY", "TAVILY_API_KEY"]
+    return all(config.get(key, "").strip() != "" for key in required)
+
 
 API_BASE = "http://127.0.0.1:8000"  # 部署时改成您的后端地址
 
 st.title("🧠 深度思考股票分析系统")
 st.info("请输入股票代码和交易日期，然后点击 **开始深度分析** 按钮")
 
+# 加载配置
+user_config = load_config()
+
+# ========================== 侧边栏设置面板 ==========================
+with st.sidebar:
+    st.header("⚙️ 系统设置")
+
+    with st.expander("🔑 API Keys（必须填写）", expanded=not is_configured(user_config)):
+        openai_key = st.text_input(
+            "OpenAI API Key",
+            value=user_config.get("OPENAI_API_KEY", ""),
+            type="password",
+            help=(
+                "**用途**：驱动所有大语言模型（GPT-4o、GPT-4o-mini），负责智能体的推理、辩论、报告生成和最终决策。\n\n"
+                "[申请 OpenAI API Key](https://platform.openai.com/api-keys)"
+            )
+        )
+        finnhub_key = st.text_input(
+            "Finnhub API Key",
+            value=user_config.get("FINNHUB_API_KEY", ""),
+            type="password",
+            help=(
+                "**用途**：获取公司新闻、财报事件、基本面数据（如市值、PE 等），是新闻分析师和基本面分析的核心数据源。\n\n"
+                "[免费申请 Finnhub API Key](https://finnhub.io/register)"
+            )
+        )
+        tavily_key = st.text_input(
+            "Tavily API Key",
+            value=user_config.get("TAVILY_API_KEY", ""),
+            type="password",
+            help=(
+                "**用途**：实时网页搜索，用于获取社交媒体情绪、最新基本面分析、宏观新闻等，是社交媒体分析师和基本面分析师的关键工具。\n\n"
+                "[申请 Tavily API Key](https://app.tavily.com/home)"
+            )
+        )
+        langsmith_key = st.text_input(
+            "LangSmith API Key（可选）",
+            value=user_config.get("LANGSMITH_API_KEY", ""),
+            type="password",
+            help=(
+                "**用途**：用于 LangSmith 追踪和调试代理链路（可视化每个智能体的调用过程），非必需，但强烈推荐开启以便调试。\n\n"
+                "[申请 LangSmith API Key](https://smith.langchain.com/settings/api-keys)"
+            )
+        )
+
+    with st.expander("🛠️ 系统参数"):
+        max_debate = st.slider("多空辩论轮数", 1, 5, user_config.get("max_debate_rounds", 2))
+        max_risk = st.slider("风控辩论轮数", 1, 3, user_config.get("max_risk_discuss_rounds", 1))
+        max_recur = st.number_input("最大递归限制", 50, 500, user_config.get("max_recur_limit", 100))
+        online_tools = st.checkbox("启用在线工具", value=user_config.get("online_tools", True))
+
+    with st.expander("✍️ 智能体提示词自定义"):
+        prompts = user_config.get("prompts", DEFAULT_CONFIG["prompts"]).copy()
+        for key, label in [
+            ("bull", "多头研究员"),
+            ("bear", "空头研究员"),
+            ("risky", "激进风控"),
+            ("safe", "保守风控"),
+            ("neutral", "中立风控"),
+            ("market_analyst", "市场分析师"),
+            ("social_analyst", "社交媒体分析师"),
+            ("news_analyst", "新闻分析师"),
+            ("fundamentals_analyst", "基本面分析师")
+        ]:
+            prompts[key] = st.text_area(f"{label}提示词", value=prompts.get(key, DEFAULT_CONFIG["prompts"][key]),
+                                        height=100)
+
+    if st.button("💾 保存所有设置", type="primary", use_container_width=True):
+        new_config = {
+            "OPENAI_API_KEY": openai_key.strip(),
+            "FINNHUB_API_KEY": finnhub_key.strip(),
+            "TAVILY_API_KEY": tavily_key.strip(),
+            "LANGSMITH_API_KEY": langsmith_key.strip(),
+            "max_debate_rounds": max_debate,
+            "max_risk_discuss_rounds": max_risk,
+            "max_recur_limit": max_recur,
+            "online_tools": online_tools,
+            "prompts": prompts
+        }
+        save_config(new_config)
+        st.success("✅ 设置已保存,正在应用新配置...")
+        st.balloons()
+
+        time.sleep(3)
+        st.rerun()
+
+    st.markdown("---")
+    st.caption(f"配置文件路径：`{os.path.abspath(CONFIG_FILE)}`")
+
+# ========================== 主分析界面 ==========================
+if not is_configured(user_config):
+    st.error("🚫 请先完成 API Key 配置！")
+    st.info("请在左侧侧边栏填写 OpenAI、Finnhub 和 Tavily 的 API Key，然后点击保存。")
+    st.stop()
+
+st.success("✅ 系统配置完成，可以开始分析！")
+
 col1, col2 = st.columns(2)
 with col1:
-    ticker = st.text_input("股票代码", "NVDA")
+    ticker = st.text_input("股票代码", value="NVDA", help="例如：NVDA, AAPL, 0700.HK")
 with col2:
-    trade_date = st.date_input("交易日期", datetime.date.today() - datetime.timedelta(days=2))
+    trade_date_input = st.date_input(
+        "交易日期",
+        value=datetime.date.today() - timedelta(days=2)
+    )
+trade_date = trade_date_input.strftime('%Y-%m-%d')
 
-if st.button("🚀 开始深度分析", type="primary"):
+if st.button("🚀 开始深度分析", type="primary", use_container_width=True):
+    st.info("正在提交分析任务...")
     resp = requests.post(f"{API_BASE}/start", json={"ticker": ticker, "trade_date": trade_date.strftime('%Y-%m-%d')})
     if resp.status_code != 200:
         st.error("后端服务不可用")
