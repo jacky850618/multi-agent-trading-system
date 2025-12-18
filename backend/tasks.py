@@ -5,7 +5,7 @@ from .agents import quick_thinking_llm
 from .agents import deep_thinking_llm
 from .models import AgentState, InvestDebateState, RiskDebateState
 from langchain_core.messages import HumanMessage
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import traceback
 from .tools import Toolkit
 from .config_user import get_user_config
@@ -22,6 +22,14 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
         - 所有日志实时追加
         """
     try:
+
+        # 强制日期不能是未来
+        analysis_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+        today = date.today()
+        if analysis_date > today:
+            append_log(task_id, f"⚠️ 交易日期 {trade_date} 是未来日期，调整为 {today}")
+            trade_date = today.strftime("%Y-%m-%d")
+            
         append_log(task_id, f"任务开始执行：分析 {ticker} 于 {trade_date}")
         user_config = get_user_config()
 
@@ -69,6 +77,8 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
         }
 
         step = 0
+        node_first_seen = set()  # 在 run_analysis 函数开头添加
+
         for i, chunk in enumerate(trading_graph.stream(graph_input, {"recursion_limit": user_config["max_recur_limit"]}), 1):
             step += 1
             if step > max_steps:
@@ -79,45 +89,49 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
                 return
             node_name = list(chunk.keys())[0]
             icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
-            append_log(task_id, f"{icon_text}")
+           
+            # 只在第一次进入该分析师节点时显示“开始分析”
+            if node_name in ["Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst"]:
+                if node_name not in node_first_seen:
+                    icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
+                    append_log(task_id, f"{icon_text}")
+                    node_first_seen.add(node_name)
+            else:
+                icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
+                append_log(task_id, f"{icon_text}")
+
+            # 工具调用只显示一次
+            if node_name == "tools":
+                if "tools" not in node_first_seen:
+                    append_log(task_id, "🔧 正在调用外部工具获取数据...")
+                    node_first_seen.add("tools")
+
             # append_log(task_id, f"(graph step {step}) executed node: {node_name}")
+            update = chunk[node_name]
+            
+            # 打印所有报告字段，无论是否为空
+            reports = {
+                "market_report": "📈 市场分析报告",
+                "sentiment_report": "💬 社交媒体情绪报告",
+                "news_report": "📰 新闻报告",
+                "fundamentals_report": "📊 基本面报告",
+            }
+            for key, label in reports.items():
+                value = update.get(key, "")
+                if value.strip():  # 有内容才打印完整
+                    append_log(task_id, f"{label}已生成:\n{value}")
+                elif key in update:
+                    append_log(task_id, f"{label}生成中...")
 
-            # 特殊处理：当某个分析师/节点生成报告时，追加报告摘要（安全访问和截断）
-            state_update = chunk[node_name]
-            # Log known report keys safely using .get to avoid KeyError and quoting issues
-            try:
-                mr = state_update.get('market_report')
-                if mr:
-                    append_log(task_id, f"📈 市场分析报告已生成: {mr[:500]}...")
+            # 其他字段
+            if update.get('investment_plan'):
+                append_log(task_id, f"📋 研究主管投资计划已制定: {update['investment_plan']}")
+            if update.get('trader_investment_plan'):
+                append_log(task_id, f"🏆 交易员提案已生成: {update['trader_investment_plan']}")
+            if update.get('final_trade_decision'):
+                append_log(task_id, f"🏆 最终决策: {update['final_trade_decision']}")
 
-                sr = state_update.get('sentiment_report')
-                if sr:
-                    append_log(task_id, f"💬 社交媒体情绪报告已生成: {sr[:500]}...")
-
-                nr = state_update.get('news_report')
-                if nr:
-                    append_log(task_id, f"📰 新闻报告已生成: {nr[:500]}...")
-
-                fr = state_update.get('fundamentals_report')
-                if fr:
-                    append_log(task_id, f"📊 基本面报告已生成: {fr[:500]}...")
-
-                ip = state_update.get('investment_plan')
-                if ip:
-                    append_log(task_id, f"📋 研究主管投资计划已制定: {ip[:800]}...")
-
-                tip = state_update.get('trader_investment_plan')
-                if tip:
-                    append_log(task_id, f"💼 交易员提案已生成: {tip[:500]}...")
-
-                fd = state_update.get('final_trade_decision')
-                if fd:
-                    append_log(task_id, f"🏆 投资组合经理最终决策完成: {fd}")
-            except Exception:
-                # Avoid any unexpected serialization errors from node outputs
-                append_log(task_id, f"(warn) 无法解析节点输出摘要: {node_name}")
-
-            final_state = state_update
+            final_state = update
 
         append_log(task_id, "✅ 主工作流执行完成！正在后处理...")
 

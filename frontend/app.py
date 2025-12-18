@@ -2,134 +2,28 @@
 import streamlit as st
 import requests
 import time
+import importlib.util
 from datetime import datetime, timedelta
 import os
-import json
+def _load_local_module(name, filename):
+    path = os.path.join(os.path.dirname(__file__), filename)
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-# ========================== 默认配置 ==========================
-DEFAULT_CONFIG = {
-    "FINNHUB_API_KEY": "",
-    "TAVILY_API_KEY": "",
-    "LANGSMITH_API_KEY": "",
-    "API_BASE": "http://127.0.0.1:8000",
-    "llm_provider": "ChatGPT(Openai)",
-    "deep_think_llm": "gpt-4o",  # 用于复杂推理和最终决策的强大模型。
-    "quick_think_llm": "gpt-4o-mini",  # 用于数据处理和初步分析的快速、低成本模型。
-    "backend_url": "https://api.openai.com/v1",
-    "proxy_enabled": False,
-    "proxy_host": "127.0.0.1",
-    "proxy_port": "7890",
-    "max_debate_rounds": 2,
-    "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 100,
-    "online_tools": True,
-    "prompts": {
-        "bull": "您是一位多头分析师。您的目标是论证投资该股票的合理性。请重点关注增长潜力、竞争优势以及报告中的积极指标。有效反驳看跌分析师的论点。",
-        "bear": "您是一位空头分析师。您的目标是论证投资该股票的不合理性。请重点关注风险、挑战以及负面指标。有效反驳看涨分析师的论点。",
-        "risky": "您是冒险型风险分析师。您主张高回报机会和大胆策略。",
-        "safe": "您是稳健型风险分析师。您优先考虑资本保值和最小化波动性。",
-        "neutral": "您是平衡型风险分析师。您提供平衡的视角，权衡收益和风险。",
-        "market_analyst": "您是一位专门分析金融市场的交易助理。您的职责是选择最相关的技术指标来分析股票的价格走势、动量和波动性。您必须使用工具获取历史数据，然后生成一份包含分析结果的报告，其中包括一个汇总表。",
-        "social_analyst": "您是一名社交媒体分析师。您的工作是分析过去一周内特定公司的社交媒体帖子和公众情绪。使用您的工具查找相关讨论，并撰写一份全面的报告，详细说明您的分析、见解以及对交易者的影响，包括一份汇总表。",
-        "news_analyst": "您是一名新闻研究员，负责分析过去一周的最新新闻和趋势。请撰写一份关于当前世界形势的综合报告，内容需与交易和宏观经济相关。请使用您的工具提供全面、详细的分析，包括汇总表。",
-        "fundamentals_analyst": "您是一名研究员，正在分析公司的基本面信息。请撰写一份关于公司财务状况、内部人士情绪和交易情况的综合报告，以全面了解其基本面状况，并附上汇总表。"
-    }
-}
+# load settings/intro modules from files in the same folder
+try:
+    settings_mod = _load_local_module("settings", "settings.py")
+except Exception as e:
+    settings_mod = None
+    st.error(f"无法加载 settings.py: {e}")
 
-CONFIG_FILE = "config_user.json"
-
-
-# ========================== 配置加载与保存 ==========================
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # 合并默认值，确保新增字段不会缺失
-            config = {**DEFAULT_CONFIG, **data}
-            config["prompts"] = {**DEFAULT_CONFIG["prompts"], **data.get("prompts", {})}
-            return config
-        except Exception as e:
-            st.error(f"配置文件加载失败，将使用默认配置: {e}")
-    return DEFAULT_CONFIG.copy()
-
-
-def save_config(config):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
-
-
-def is_configured(config):
-    """
-        检查是否已完成必要配置：
-        - Finnhub 和 Tavily 必须填写（数据源）
-        - LLM 平台（OpenAI / DeepSeek / 通义千问 / 豆包）至少配置一个 API Key
-        """
-    # 必填数据源
-    data_required = ["FINNHUB_API_KEY", "TAVILY_API_KEY"]
-    if not all(config.get(key, "").strip() != "" for key in data_required):
-        return False
-
-    # LLM 平台至少配置一个
-    llm_keys = [
-        "OPENAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "QWEN_API_KEY",
-        "DOUBAO_API_KEY"
-    ]
-    if not any(config.get(key, "").strip() != "" for key in llm_keys):
-        return False
-
-    return True
-
-
-# ========================== 测试连接函数（测试 Google 首页 + 本地后端） ==========================
-def test_connections(session):
-    results = []
-    try:
-        resp = session.get("https://www.google.com", timeout=10)
-        if resp.status_code == 200:
-            results.append(("✅ 外部网络（Google）", "连接成功，代理工作正常"))
-        else:
-            results.append(("⚠️ 外部网络（Google）", f"状态码 {resp.status_code}"))
-    except Exception as e:
-        results.append(("❌ 外部网络（Google）", f"连接失败：{str(e)}"))
-
-    return results
-
-
-def get_smart_session(config):
-    """
-    智能代理会话：
-    - 如果目标是 127.0.0.1 或 localhost → 直连（不走代理）
-    - 其他所有请求 → 走用户配置的代理
-    """
-    session = requests.Session()
-
-    if config.get("proxy_enabled", False):
-        host = config.get("proxy_host", "").strip()
-        port = config.get("proxy_port", "").strip()
-        if host and port:
-            proxy_url = f"http://{host}:{port}"
-            # 设置全局代理
-            session.proxies.update({
-                "http": proxy_url,
-                "https": proxy_url,
-            })
-            st.sidebar.success(f"代理已启用：{proxy_url}（外部服务走代理，本地直连）")
-        else:
-            st.sidebar.warning("代理启用但地址/端口为空，将直连所有服务")
-
-        # 关键：添加 NO_PROXY 环境变量，绕过本地地址
-        # requests 尊重 NO_PROXY
-        import os
-        os.environ["NO_PROXY"] = "127.0.0.1,localhost,0.0.0.0"
-
-    else:
-        st.sidebar.info("代理未启用（所有服务直连）")
-
-    return session
-
+try:
+    intro_mod = _load_local_module("intro", "intro.py")
+except Exception as e:
+    intro_mod = None
+    st.error(f"无法加载 intro.py: {e}")
 
 st.set_page_config(
     page_title="深度思考股票分析系统",  # 浏览器标签页标题
@@ -139,319 +33,121 @@ st.set_page_config(
 )
 
 st.title("🧠 深度思考股票分析系统")
-st.info("请输入股票代码和交易日期，然后点击 **开始深度分析** 按钮")
-
-# 加载配置
-user_config = load_config()
-
-# ========================== 侧边栏设置面板 ==========================
-with st.sidebar:
-    st.header("⚙️ 系统设置")
-
-    with st.expander("🌐 后端服务地址"):
-        api_base = st.text_input(
-            "后端 FastAPI 服务地址（API_BASE）",
-            value=user_config.get("API_BASE", DEFAULT_CONFIG["API_BASE"]),
-            help="后端服务地址，例如：http://127.0.0.1:8000 或 https://your-domain.com"
-        )
-
-    with st.expander("🌐 网络代理设置"):
-        proxy_enabled = st.checkbox("启用网络代理（仅外部服务）", value=user_config.get("proxy_enabled", False))
-        proxy_host = st.text_input("代理地址（Host）", value=user_config.get("proxy_host", "127.0.0.1"))
-        proxy_port = st.text_input("代理端口（Port）", value=user_config.get("proxy_port", "7890"))
-
-        if st.button("🧪 测试网络连接", type="secondary"):
-            temp_config = user_config.copy()
-            temp_config.update({
-                "proxy_enabled": proxy_enabled,
-                "proxy_host": proxy_host,
-                "proxy_port": proxy_port
-            })
-            test_session = get_smart_session(temp_config)
-            test_results = test_connections(test_session)
-
-            for icon, msg in test_results:
-                if "成功" in icon:
-                    st.success(f"{icon} {msg}")
-                elif "失败" in icon:
-                    st.error(f"{icon} {msg}")
-                else:
-                    st.warning(f"{icon} {msg}")
-
-    with st.expander("🔑 API Keys", expanded=not is_configured(user_config)):
-        finnhub_key = st.text_input(
-            "Finnhub API Key",
-            value=user_config.get("FINNHUB_API_KEY", ""),
-            type="password",
-            help=(
-                "**用途**：获取公司新闻、财报事件、基本面数据（如市值、PE 等），是新闻分析师和基本面分析的核心数据源。\n\n"
-                "[免费申请 Finnhub API Key](https://finnhub.io/register)"
-            )
-        )
-        tavily_key = st.text_input(
-            "Tavily API Key",
-            value=user_config.get("TAVILY_API_KEY", ""),
-            type="password",
-            help=(
-                "**用途**：实时网页搜索，用于获取社交媒体情绪、最新基本面分析、宏观新闻等，是社交媒体分析师和基本面分析师的关键工具。\n\n"
-                "[申请 Tavily API Key](https://app.tavily.com/home)"
-            )
-        )
-        langsmith_key = st.text_input(
-            "LangSmith API Key（可选）",
-            value=user_config.get("LANGSMITH_API_KEY", ""),
-            type="password",
-            help=(
-                "**用途**：用于 LangSmith 追踪和调试智能体链路（可视化每个智能体的调用过程），非必需，但强烈推荐开启以便调试。\n\n"
-                "[申请 LangSmith API Key](https://smith.langchain.com/settings/api-keys)"
-            )
-        )
-
-    # 新增：单独的大语言模型配置面板
-    with st.expander("🤖 大语言模型配置"):
-        llm_provider_options = ["ChatGPT(Openai)", "Deepseek", "通义千问(qwen)", "豆包(doubao)"]
-        llm_provider = st.selectbox(
-            "LLM 提供商 (llm_provider)",
-            options=llm_provider_options,
-            index=llm_provider_options.index(user_config.get("llm_provider", "ChatGPT(Openai)")),
-            help="选择 LLM 服务提供商"
-        )
-
-        # 根据提供商显示对应的 API Key 输入框
-        if llm_provider == "ChatGPT(Openai)":
-            openai_api_key = st.text_input("OpenAI API Key", value=user_config.get("OPENAI_API_KEY", ""),
-                                           type="password",
-                                           help="**用途**：OpenAI/ChatGPT 的访问密钥\n\n[申请 OpenAI API Key](https://platform.openai.com/api-keys)")
-        elif llm_provider == "Deepseek":
-            deepseek_api_key = st.text_input("DeepSeek API Key", value=user_config.get("DEEPSEEK_API_KEY", ""),
-                                             type="password",
-                                             help="**用途**：DeepSeek 平台的访问密钥\n\n[申请 DeepSeek API Key](https://platform.deepseek.com/api_keys)")
-        elif llm_provider == "通义千问(qwen)":
-            qwen_api_key = st.text_input("通义千问 API Key", value=user_config.get("QWEN_API_KEY", ""),
-                                         type="password",
-                                         help="**用途**：阿里云通义千问的访问密钥\n\n[申请 Qwen API Key](https://dashscope.aliyuncs.com/api/v1)")
-        elif llm_provider == "豆包(doubao)":
-            doubao_api_key = st.text_input("豆包 API Key", value=user_config.get("DOUBAO_API_KEY", ""),
-                                           type="password",
-                                           help="**用途**：豆包平台的访问密钥\n\n[申请 Doubao API Key](https://www.doubao.com/api/keys)")
-
-        deep_think_llm = st.text_input(
-            "复杂推理模型 (deep_think_llm)",
-            value=user_config.get("deep_think_llm", ""),
-            help="用于复杂推理和最终决策的强大模型（如 gpt-4o、deepseek-chat、qwen-max）"
-        )
-        quick_think_llm = st.text_input(
-            "快速处理模型 (quick_think_llm)",
-            value=user_config.get("quick_think_llm", ""),
-            help="用于数据处理和初步分析的快速、低成本模型（如 gpt-4o-mini、deepseek-coder、qwen-turbo）"
-        )
-        backend_url = st.text_input(
-            "模型基地址 (backend_url)",
-            value=user_config.get("backend_url", ""),
-            help="LLM 平台的 API 基地址（如 OpenAI: https://api.openai.com/v1，DeepSeek: https://api.deepseek.com/v1）"
-        )
-
-    with st.expander("🛠️ 系统参数"):
-        max_debate = st.slider("多空辩论轮数", 1, 5, user_config.get("max_debate_rounds", 2))
-        max_risk = st.slider("风控辩论轮数", 1, 3, user_config.get("max_risk_discuss_rounds", 1))
-        max_recur = st.number_input("最大递归限制", 50, 500, user_config.get("max_recur_limit", 100))
-        online_tools = st.checkbox("启用在线工具", value=user_config.get("online_tools", True))
-
-    with st.expander("✍️ 自定义提示词"):
-        prompts = user_config.get("prompts", DEFAULT_CONFIG["prompts"]).copy()
-        for key, label in [
-            ("bull", "多头分析员"),
-            ("bear", "空头分析员"),
-            ("risky", "激进风控研究员"),
-            ("safe", "稳健风控研究员"),
-            ("neutral", "平衡风控研究员"),
-            ("market_analyst", "市场分析师"),
-            ("social_analyst", "社交媒体分析师"),
-            ("news_analyst", "新闻分析师"),
-            ("fundamentals_analyst", "基本面分析师")
-        ]:
-            prompts[key] = st.text_area(f"{label}提示词", value=prompts.get(key, DEFAULT_CONFIG["prompts"][key]),
-                                        height=100)
-
-    if st.button("💾 保存所有设置", type="primary", use_container_width=True):
-        new_config = {
-            "FINNHUB_API_KEY": finnhub_key.strip(),
-            "TAVILY_API_KEY": tavily_key.strip(),
-            "LANGSMITH_API_KEY": langsmith_key.strip(),
-            "API_BASE": api_base.strip().rstrip("/"),  # 去除末尾斜杠
-            "llm_provider": llm_provider,
-            "deep_think_llm": deep_think_llm.strip(),
-            "quick_think_llm": quick_think_llm.strip(),
-            "backend_url": backend_url.strip().rstrip("/"),
-            "proxy_enabled": proxy_enabled,
-            "proxy_host": proxy_host.strip(),
-            "proxy_port": proxy_port.strip(),
-            "max_debate_rounds": max_debate,
-            "max_risk_discuss_rounds": max_risk,
-            "max_recur_limit": max_recur,
-            "online_tools": online_tools,
-            "prompts": prompts
-        }
-
-        # 根据选择的提供商保存对应的 API Key
-        if llm_provider == "ChatGPT(Openai)":
-            new_config["OPENAI_API_KEY"] = openai_api_key.strip()
-        elif llm_provider == "Deepseek":
-            new_config["DEEPSEEK_API_KEY"] = deepseek_api_key.strip()
-        elif llm_provider == "通义千问(qwen)":
-            new_config["QWEN_API_KEY"] = qwen_api_key.strip()
-        elif llm_provider == "豆包(doubao)":
-            new_config["DOUBAO_API_KEY"] = doubao_api_key.strip()
-
-        save_config(new_config)
-        st.success("✅ 设置已保存,正在应用新配置...")
-        st.balloons()
-
-        time.sleep(3)
-        st.rerun()
-
-    st.markdown("---")
-    st.caption(f"配置文件路径：`{os.path.abspath(CONFIG_FILE)}`")
-
-# ========================== 主分析界面 ==========================
-if not is_configured(user_config):
-    st.error("🚫 请先完成 API Key 配置！")
-    st.info("请在左侧侧边栏填写 OpenAI、Finnhub 和 Tavily 的 API Key，然后点击保存。")
+# 加载配置（使用 settings 模块中的实现）
+if settings_mod is None:
     st.stop()
+user_config = settings_mod.load_config()
 
-st.success("✅ 系统配置完成，可以开始分析！")
+tabs = st.tabs(["🧠 首页", "⚙️ 系统设置", "📘 系统介绍"])
+home_tab, settings_tab, intro_tab = tabs
 
-# ------------------ 分析中任务面板 ------------------
-api_base = user_config.get("API_BASE", DEFAULT_CONFIG["API_BASE"]).rstrip("/")
-session = get_smart_session(user_config)
-try:
-    tasks_resp = session.get(f"{api_base}/tasks", timeout=3)
-    if tasks_resp.status_code == 200:
-        tasks = tasks_resp.json().get("tasks", [])
+with settings_tab:
+    if settings_mod is None:
+        st.error("settings 模块未加载，无法显示设置界面。")
     else:
+        settings_mod.render_settings(user_config)
+
+with intro_tab:
+    if intro_mod is None:
+        st.error("intro 模块未加载，无法显示介绍页面。")
+    else:
+        intro_mod.render_intro()
+
+with home_tab:
+    # ========================== 主分析界面 ==========================
+    if not settings_mod.is_configured(user_config):
+        st.error("🚫 请先完成 API Key 配置！")
+        st.info("请在左侧侧边栏填写 OpenAI、Finnhub 和 Tavily 的 API Key，然后点击保存。")
+        st.stop()
+
+    st.success("✅ 系统配置完成，可以开始分析, 请输入股票代码和交易日期，然后点击 **开始深度分析** 按钮！")
+
+    # ------------------ 分析中任务面板 ------------------
+    api_base = user_config.get("API_BASE", settings_mod.DEFAULT_CONFIG["API_BASE"]).rstrip("/")
+    session = settings_mod.get_smart_session(user_config)
+    try:
+        tasks_resp = session.get(f"{api_base}/tasks", timeout=3)
+        if tasks_resp.status_code == 200:
+            tasks = tasks_resp.json().get("tasks", [])
+        else:
+            tasks = []
+    except Exception as e:
         tasks = []
-except Exception as e:
-    tasks = []
 
-running_tasks = [t for t in tasks if t.get("status") != "completed"]
-if running_tasks:
-    st.markdown("### 🔄 分析中任务")
-    for t in running_tasks:
-        title = f"{t.get('ticker')}  — {t.get('status')}  — {t.get('created_at') or ''}"
-        with st.expander(title, expanded=False):
-            st.write(f"Task ID: {t.get('task_id')}")
-            st.write(f"日志行数: {t.get('logs_count')}")
-            if st.button("查看详情", key=f"view_{t.get('task_id')}"):
-                try:
-                    s = session.get(f"{api_base}/status/{t.get('task_id')}", timeout=5)
-                    if s.status_code == 200:
-                        data = s.json()
-                        logs = data.get("logs", []) or []
-                        st.text_area("实时分析日志", "\n".join(logs), height=400)
-                        final = data.get("final_result") or {}
-                        st.write("最终结果:", final)
+    running_tasks = [t for t in tasks if t.get("status") != "completed"]
+    if running_tasks:
+        st.markdown("### 🔄 分析中任务")
+        for t in running_tasks:
+            title = f"{t.get('ticker')}  — {t.get('status')}  — {t.get('created_at') or ''}"
+            with st.expander(title, expanded=False):
+                st.write(f"Task ID: {t.get('task_id')}")
+                st.write(f"日志行数: {t.get('logs_count')}")
+                if st.button("查看详情", key=f"view_{t.get('task_id')}"):
+                    try:
+                        s = session.get(f"{api_base}/status/{t.get('task_id')}", timeout=5)
+                        if s.status_code == 200:
+                            data = s.json()
+                            logs = data.get("logs", []) or []
+                            st.text_area("实时分析日志", "\n".join(logs), height=400)
+                            final = data.get("final_result") or {}
+                            st.write("最终结果:", final)
+                        else:
+                            st.error(f"无法获取任务详情：{s.status_code}")
+                    except Exception as e:
+                        st.error(f"获取任务详情失败：{e}")
+
+
+    col1, col2 = st.columns(2)
+    with col1:
+        ticker = st.text_input("股票代码", value="NVDA", help="例如：NVDA, AAPL, 0700.HK")
+    with col2:
+        trade_date_input = st.date_input(
+            "交易日期",
+            value=datetime.now().date() - timedelta(days=2)
+        )
+    trade_date = trade_date_input.strftime('%Y-%m-%d')
+
+    if st.button("🚀 开始深度分析", type="primary", use_container_width=True):
+        st.info("正在提交分析任务...")
+        api_base = user_config["API_BASE"]
+        resp = requests.post(f"{api_base}/start", json={"ticker": ticker, "trade_date": trade_date})
+        if resp.status_code != 200:
+            st.error("后端服务不可用")
+        else:
+            task_id = resp.json()["task_id"]
+            st.success(f"任务提交成功！Task ID: {task_id}")
+
+            log_placeholder = st.empty()
+            progress = st.progress(0)
+            status_text = st.empty()
+
+            logs = []
+            while True:
+                status_resp = requests.get(f"{api_base}/status/{task_id}")
+                if status_resp.status_code == 200:
+                    data = status_resp.json()
+                    # 防御性获取字段，避免后端未包含某些键导致前端崩溃
+                    new_logs = data.get("logs", []) or []
+                    if new_logs != logs:
+                        logs = new_logs
+                        log_placeholder.text_area("实时分析日志", "\n".join(logs), height=600)
+
+                    status = data.get("status")
+                    if status == "completed":
+                        result = data.get("final_result", {}) or {}
+                        signal = result.get('signal') if isinstance(result, dict) else None
+                        st.balloons()
+                        st.success(f"最终信号：**{signal}**")
+                        st.markdown("### 最终决策")
+                        st.markdown(result.get("decision", ""))
+                        st.download_button("下载日志", "\n".join(logs), f"analysis_{ticker}.txt")
+                        break
+                    elif status == "error":
+                        # 显示后端返回的错误信息（如果有）
+                        err = data.get("error") or data.get("message") or "分析失败"
+                        st.error(f"分析失败: {err}")
+                        break
                     else:
-                        st.error(f"无法获取任务详情：{s.status_code}")
-                except Exception as e:
-                    st.error(f"获取任务详情失败：{e}")
-
-
-col1, col2 = st.columns(2)
-with col1:
-    ticker = st.text_input("股票代码", value="NVDA", help="例如：NVDA, AAPL, 0700.HK")
-with col2:
-    trade_date_input = st.date_input(
-        "交易日期",
-        value=datetime.now().date() - timedelta(days=2)
-    )
-trade_date = trade_date_input.strftime('%Y-%m-%d')
-
-if st.button("🚀 开始深度分析", type="primary", use_container_width=True):
-    st.info("正在提交分析任务...")
-    api_base = user_config["API_BASE"]
-    resp = requests.post(f"{api_base}/start", json={"ticker": ticker, "trade_date": trade_date})
-    if resp.status_code != 200:
-        st.error("后端服务不可用")
-    else:
-        task_id = resp.json()["task_id"]
-        st.success(f"任务提交成功！Task ID: {task_id}")
-
-        log_placeholder = st.empty()
-        progress = st.progress(0)
-        status_text = st.empty()
-
-        logs = []
-        while True:
-            status_resp = requests.get(f"{api_base}/status/{task_id}")
-            if status_resp.status_code == 200:
-                data = status_resp.json()
-                # 防御性获取字段，避免后端未包含某些键导致前端崩溃
-                new_logs = data.get("logs", []) or []
-                if new_logs != logs:
-                    logs = new_logs
-                    log_placeholder.text_area("实时分析日志", "\n".join(logs), height=600)
-
-                status = data.get("status")
-                if status == "completed":
-                    result = data.get("final_result", {}) or {}
-                    signal = result.get('signal') if isinstance(result, dict) else None
-                    st.balloons()
-                    st.success(f"最终信号：**{signal}**")
-                    st.markdown("### 最终决策")
-                    st.markdown(result.get("decision", ""))
-                    st.download_button("下载日志", "\n".join(logs), f"analysis_{ticker}.txt")
-                    break
-                elif status == "error":
-                    # 显示后端返回的错误信息（如果有）
-                    err = data.get("error") or data.get("message") or "分析失败"
-                    st.error(f"分析失败: {err}")
-                    break
-                else:
-                    progress.progress(min(len(logs) / 25, 0.95))
-                    status_text.text("分析进行中...")
-            time.sleep(2)  # 每2秒轮询一次
-
-st.markdown("""
-    ## 
-    **Deep Thinking Trading System** 是一个基于 **LangGraph 多智能体框架** 的高级智能交易决策系统，模拟真实投资机构的完整决策流程，具备以下突出优势：
-
-    ### 🧠 多智能体深度协作（Society of Agents）
-    - 系统由 **12+ 专业智能体** 组成，包括：市场分析师、社交媒体分析师、新闻分析师、基本面分析师、多空研究员、研究员主管、交易员、三方风控分析师（激进/稳健/平衡）、投资组合经理。
-    - 每个智能体拥有独立角色、专业工具和长期记忆，协作完成从情报收集 → 辩论 → 交易提案 → 风险审核 → 最终决策的全链路。
-
-    ### ⚔️ 内置对抗性辩论机制
-    - **多空辩论**：多头研究员与空头研究员进行多轮激烈辩论，充分暴露机会与风险。
-    - **三方风控辩论**：激进/稳健/平衡三位风控分析师对交易提案进行挑战，确保决策稳健。
-
-    ### 🌐 实时多源数据驱动
-    - 集成 **Yahoo Finance、Finnhub、Tavily 实时搜索**，获取最新股价、技术指标、新闻、社交媒体情绪、基本面数据。
-    - 支持 ReAct 智能循环：智能体可多次调用工具，直至获得足够信息。
-
-    ### 🧬 自进化学习能力
-    - 每个关键智能体拥有独立的 **长期记忆系统**（基于 ChromaDB 向量存储）。
-    - 每次交易结束后进行反思，将经验教训存档，系统随使用次数增多而越来越聪明。
-
-    ### 🔍 多维度质量评估
-    - **LLM-as-a-Judge**：大模型评分决策的逻辑性、证据支持和可执行性。
-    - **真实市场验证**：对比实际股价表现评估信号正确性。
-    - **事实一致性审计**：防止智能体“幻觉”，确保报告与数据源一致。
-    
-    ### 📊 支持的市场
-    | 市场          | 支持程度 | 示例代码                  | 推荐度    | 说明                                      |
-    |---------------|----------|---------------------------|-----------|-------------------------------------------|
-    | **美国股市**（NYSE/NASDAQ） | ★★★★★ | NVDA, AAPL, TSLA, MSFT   | 强烈推荐 | 数据最完整、实时性最强、分析最可靠        |
-    | **港股**（HKEX）            | ★★★★  | 0700.HK（腾讯）、9988.HK（阿里） | 推荐     | 支持良好，适合中概股和港股通标的          |
-    | **A股**（沪深）             | ★★★   | 600519.SS（茅台）、000001.SZ | 可尝试   | 数据部分延迟，建议结合国内资讯验证        |
-    | **其他国际市场**（欧股、日股等） | ★★    | ASML.AS, 7203.T          | 参考使用 | 数据覆盖有限，仅作初步分析                |
-
-    > **最佳分析对象**：美国 NYSE / NASDAQ 上市股票（FAANG、科技、AI、新能源等热门板块）  
-    > **次佳选择**：香港主板上市股票（尤其是中概互联、科技股）
-
-    ### 📊 完全透明的可视化过程
-    - 实时展示每个智能体的执行节点、工具调用和思考过程。
-    - 用户像观看“交易团队会议”一样，看到决策是如何一步步形成的。
-
-    ### 🚀 适用于
-    - 量化交易研究、投资决策辅助、算法交易策略验证、AI 金融教育演示。
-    > **这不仅仅是一个交易信号生成器，而是一个可解释、可学习、可扩展的“智能投资研究机构”。**
-    """)
+                        progress.progress(min(len(logs) / 25, 0.95))
+                        status_text.text("分析进行中...")
+                time.sleep(2)  # 每2秒轮询一次

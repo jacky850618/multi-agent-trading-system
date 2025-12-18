@@ -1,4 +1,5 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
+import asyncio
 from pydantic import BaseModel
 from .storage import create_task, get_task
 from .tasks import run_analysis
@@ -53,3 +54,47 @@ def list_tasks(status: str = None):
 
 print(
     f"当前 LLM 配置: {user_config['llm_provider']} | 复杂模型: {user_config['deep_think_llm']} | 快速模型: {user_config['quick_think_llm']}")
+
+
+@app.websocket("/ws/status/{task_id}")
+async def websocket_status(websocket: WebSocket, task_id: str):
+    """WebSocket endpoint that streams task logs in real-time.
+
+    Clients should connect to `/ws/status/{task_id}` and will receive JSON
+    messages of the form: {"type": "log", "line": "..."} for each log
+    line, and a final message {"type":"status","status":"completed",...}
+    when the task finishes.
+    """
+    await websocket.accept()
+    try:
+        last_idx = 0
+        while True:
+            task = get_task(task_id)
+            if not task:
+                await websocket.send_json({"type": "status", "status": "not_found"})
+                await asyncio.sleep(0.5)
+                continue
+
+            logs = task.get("logs", [])
+            # send any new logs
+            if last_idx < len(logs):
+                for line in logs[last_idx:]:
+                    await websocket.send_json({"type": "log", "line": line})
+                last_idx = len(logs)
+
+            status = task.get("status")
+            if status == "completed":
+                await websocket.send_json({"type": "status", "status": "completed", "final_result": task.get("final_result")})
+                break
+            if status == "error":
+                await websocket.send_json({"type": "status", "status": "error", "error": task.get("error")})
+                break
+
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

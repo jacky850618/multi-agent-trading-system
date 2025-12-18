@@ -1,14 +1,15 @@
 # 定义 LangGraph 工作流的状态结构。
 from typing_extensions import TypedDict
 from langgraph.graph import MessagesState
-
+from langgraph.graph.message import add_messages
+from typing import Annotated
 
 # 记录多空辩论的历史和轮次
 # 研究团队辩论的状态，用作专门的草稿本。
 class InvestDebateState(TypedDict):
-    bull_history: str  # 存储多头智能体的论点。
-    bear_history: str  # 存储空头智能体的论点。
-    history: str  # 辩论的完整记录。
+    bull_history: Annotated[list, add_messages]  # 存储多头智能体的论点。
+    bear_history: Annotated[list, add_messages]  # 存储空头智能体的论点。
+    history: Annotated[list, add_messages]  # 辩论的完整记录。
     current_response: str  # 最新提出的论点。
     judge_decision: str  # 经理的最终决定。
     count: int  # 用于跟踪辩论轮数的计数器。
@@ -33,6 +34,7 @@ class RiskDebateState(TypedDict):
 class AgentState(MessagesState):
     company_of_interest: str  # 我们正在分析的股票代码。
     trade_date: str  # 分析日期。
+    current_analyst: str #当前正在执行的分析师
     sender: str  # 跟踪哪个智能体最后修改了状态。
     # 每个分析师都会填充自己的报告字段。
     market_report: str

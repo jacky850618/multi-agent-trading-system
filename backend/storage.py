@@ -21,7 +21,19 @@ def create_task(ticker: str, trade_date: str) -> str:
 def append_log(task_id: str, log_line: str):
     if task_id in task_storage:
         timestamp = datetime.now().strftime('%H:%M:%S')
-        task_storage[task_id]["logs"].append(f"[{timestamp}] {log_line}")
+        entry = f"[{timestamp}] {log_line}"
+        logs = task_storage[task_id]["logs"]
+        # Avoid appending the same log line consecutively (dedupe by message text)
+        if logs:
+            try:
+                last = logs[-1]
+                # strip leading timestamp like [HH:MM:SS] <space>
+                last_text = last.split('] ', 1)[1] if '] ' in last else last
+            except Exception:
+                last_text = logs[-1]
+            if last_text == log_line:
+                return
+        logs.append(entry)
 
 def get_task(task_id: str):
     if task_id in task_storage:

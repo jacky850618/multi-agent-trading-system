@@ -68,55 +68,49 @@ def create_analyst_node(llm, toolkit, system_message, tools, output_field):
         """
 
     """创建分析师节点"""
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "您是一位乐于助人的AI助手，与其他助手协作。使用提供的工具来逐步回答问题。"
-         " 如果您无法完全回答，没关系；另一位拥有不同工具的助手会从您中断的地方继续提供帮助。尽您所能，继续前进。"
-         " 您可以使用以下工具：{tool_names}。\n{system_message}"
-         " 供您参考，当前日期为{current_date}。我们要查看的公司是{ticker}。"),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    prompt = prompt.partial(system_message=system_message)
-    prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-    chain = prompt | llm.bind_tools(tools)
+    # NOTE: avoid using model tool-calling (bind_tools) here because
+    # some LLM providers return assistant tool_calls without matching
+    # tool messages which causes OpenAI 400 errors. Instead, we
+    # construct a plain-text prompt and call the LLM directly. This
+    # prevents the model from attempting ReAct tool-calls inside the
+    # graph runner and reduces risk of infinite tool loops.
 
     def analyst_node(state: AgentState):
-        # 为每个分析师创建全新的干净消息历史
-        initial_messages = [
-            HumanMessage(content=f"Analyze {state['company_of_interest']} on {state['trade_date']}. "
-                                 f"Focus on {output_field.replace('_', ' ')}.")
-        ]
+        # 复用 state 中已有的消息历史（包含工具调用结果），避免每次都重新调用工具
+        initial_message = HumanMessage(
+            content=f"请分析 {state['company_of_interest']} 在 {state['trade_date']} 的 {output_field.replace('_', ' ')}。"
+        )
 
-        # 传入完整的消息历史 + 动态变量
-        result = chain.invoke({
-            # "messages": state["messages"],
-            "messages": initial_messages,
-            "current_date": state["trade_date"],
-            "ticker": state["company_of_interest"]
-        })
-
-        # 现在 result 是 AIMessage，才有 tool_calls 属性
-        report = ""
-        if hasattr(result, "tool_calls") and result.tool_calls:
-            report = ""  # 有 tool_calls，继续 ReAct 循环，不生成报告
+        prev_messages = state.get("messages") or []
+        # 确保 initial_message 在消息历史起始处
+        if not prev_messages or prev_messages[0].content != initial_message.content:
+            messages_for_model = [initial_message] + prev_messages
         else:
-            report = result.content  # 最终回答，生成报告
+            messages_for_model = prev_messages
 
-        # 只更新报告字段，不污染全局 messages
-        update = {output_field: report}
+        # Build a plain-text prompt from the system instruction and message history
+        tool_names_str = ", ".join([getattr(t, "name", str(t)) for t in tools])
+        system_block = (
+            f"您是一位乐于助人的AI助手，与其他助手协作。可用工具: {tool_names_str}. \n"
+            f"{system_message}\n当前日期: {state['trade_date']}. 公司: {state['company_of_interest']}.\n"
+        )
 
-        # 保留 messages 用于工具调用循环，但限制历史长度以防止无限增长导致路由护栏触发
-        try:
-            existing = list(state.get("messages", []))
-        except Exception:
-            existing = []
-        # 保留最近的若干消息（包括即将添加的 result），避免无限增长
-        MAX_MESSAGES = 6
-        if len(existing) >= MAX_MESSAGES - 1:
-            existing = existing[-(MAX_MESSAGES - 1):]
-        update["messages"] = existing + [result]
+        history_text = "\n".join([m.content for m in messages_for_model if hasattr(m, 'content')])
+        prompt_text = system_block + "\n对话历史:\n" + history_text + f"\n\n请基于以上信息撰写{output_field.replace('_',' ')}。"
 
-        return update
+        # Invoke the LLM directly (no tool-calling)
+        llm_response = llm.invoke(prompt_text)
+        report = getattr(llm_response, "content", "").strip()
+
+        # Update messages history with a proper assistant message object (avoid storing raw result objects)
+        from langchain_core.messages import AIMessage
+        assistant_message = AIMessage(content=report)
+        new_messages = messages_for_model + [assistant_message]
+
+        return {
+            output_field: report,
+            "messages": new_messages
+        }
 
     return analyst_node
 
@@ -148,16 +142,21 @@ def create_researcher_node(llm, memory, role_prompt, agent_name):
 
         # 使用新论点更新辩论状态。
         debate_state = state['investment_debate_state'].copy()
-        debate_state['history'] += "\n" + argument
+        # 使用 reducer 方式更新
+        updates = {
+            "investment_debate_state": {
+                "history": [argument],  # add_messages 会追加
+                "current_response": argument,
+                "count": debate_state["count"] + 1,
+            }
+        }
 
-        # 更新此智能体（多头或空头）的特定历史记录。
-        if agent_name == 'Bull Analyst':
-            debate_state['bull_history'] += "\n" + argument
+        if agent_name == "Bull Analyst":
+            updates["investment_debate_state"]["bull_history"] = [argument]
         else:
-            debate_state['bear_history'] += "\n" + argument
-        debate_state['current_response'] = argument
-        debate_state['count'] += 1
-        return {"investment_debate_state": debate_state}
+            updates["investment_debate_state"]["bear_history"] = [argument]
+
+        return updates
 
     return researcher_node
 
@@ -210,10 +209,11 @@ def create_risk_debator(llm, role_prompt, agent_name):
             f"Neutral: {risk_state['current_neutral_response']}")
 
         # 使用交易者的计划、辩论历史构建提示信息以及对手的论点。
+        sep = "\n"
         prompt = f"""{role_prompt}
         以下是交易者的计划：{state['trader_investment_plan']}
         辩论历史：{risk_state['history']}
-        对手的最后论点：\n {'\n'.join(opponents_args)}
+        对手的最后论点：\n {sep.join(opponents_args)}
         请从您的角度评价或支持该计划。"""
 
         response = llm.invoke(prompt).content
