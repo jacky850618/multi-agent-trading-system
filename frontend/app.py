@@ -3,6 +3,8 @@ import streamlit as st
 import requests
 import time
 import importlib.util
+import threading
+import queue
 from datetime import datetime, timedelta
 import os
 def _load_local_module(name, filename):
@@ -116,38 +118,130 @@ with home_tab:
         else:
             task_id = resp.json()["task_id"]
             st.success(f"任务提交成功！Task ID: {task_id}")
+            # ---------------- websocket listener ----------------
+            q = queue.Queue()
+            stop_event = threading.Event()
+
+            def _ws_listener(api_base_url, task_id, out_q, stop_evt):
+                # Try to use websocket-client; fallback to pushing an error into queue
+                try:
+                    import websocket
+                except Exception as e:
+                    out_q.put(f"**WebSocket 库未安装，回退到 HTTP 轮询 (错误: {e})**")
+                    out_q.put(None)
+                    return
+
+                ws_url = api_base_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/status/{task_id}"
+
+                def on_message(ws, message):
+                    # backend may send either plain markdown text or a JSON string like
+                    # {"type":"log","line":"...markdown..."}
+                    try:
+                        import json as _json
+                        parsed = _json.loads(message)
+                        # If structured message contains 'line' or 'markdown', use that
+                        if isinstance(parsed, dict):
+                            if parsed.get("line"):
+                                out_q.put(parsed.get("line"))
+                                return
+                            if parsed.get("markdown"):
+                                out_q.put(parsed.get("markdown"))
+                                return
+                            # If final result object included
+                            if parsed.get("type") == "final_result" or parsed.get("final"):
+                                out_q.put(parsed)
+                                return
+                        # fallback: put raw message
+                        out_q.put(message)
+                    except Exception:
+                        # not JSON, treat as raw markdown/text
+                        out_q.put(message)
+
+                def on_error(ws, error):
+                    out_q.put(f"**WS_ERROR:** {error}")
+
+                def on_close(ws, close_status_code, close_msg):
+                    out_q.put(None)
+
+                try:
+                    wsapp = websocket.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
+                    wsapp.run_forever()
+                except Exception as e:
+                    out_q.put(f"**WS_RUN_ERROR:** {e}")
+                    out_q.put(None)
+
+            t = threading.Thread(target=_ws_listener, args=(api_base, task_id, q, stop_event), daemon=True)
+            t.start()
 
             log_placeholder = st.empty()
             progress = st.progress(0)
             status_text = st.empty()
 
             logs = []
+            finished = False
+            seen = set()
+            # read from queue until None sentinel
             while True:
-                status_resp = requests.get(f"{api_base}/status/{task_id}")
-                if status_resp.status_code == 200:
-                    data = status_resp.json()
-                    # 防御性获取字段，避免后端未包含某些键导致前端崩溃
-                    new_logs = data.get("logs", []) or []
-                    if new_logs != logs:
-                        logs = new_logs
-                        log_placeholder.text_area("实时分析日志", "\n".join(logs), height=600)
+                try:
+                    item = q.get(timeout=1)
+                except queue.Empty:
+                    item = None
 
-                    status = data.get("status")
-                    if status == "completed":
-                        result = data.get("final_result", {}) or {}
-                        signal = result.get('signal') if isinstance(result, dict) else None
+                if item is None:
+                    if not t.is_alive():
+                        finished = True
+                        break
+                    # no new message, continue polling
+                    # update progress placeholder periodically
+                    progress.progress(min(len(logs) / 25, 0.95))
+                    status_text.text("分析进行中...")
+                    continue
+
+                # handle structured final messages (dict) from WS
+                if isinstance(item, dict):
+                    # if backend sent a final_result payload, render final decision
+                    final = item.get("final_result") or item.get("final") or item.get("result")
+                    if final:
+                        signal = final.get("signal") if isinstance(final, dict) else None
                         st.balloons()
                         st.success(f"最终信号：**{signal}**")
                         st.markdown("### 最终决策")
-                        st.markdown(result.get("decision", ""))
-                        st.download_button("下载日志", "\n".join(logs), f"analysis_{ticker}.txt")
+                        st.markdown(final.get("decision", "") if isinstance(final, dict) else str(final))
+                        st.download_button("下载日志", "\n\n".join(logs), f"analysis_{ticker}.md")
                         break
-                    elif status == "error":
-                        # 显示后端返回的错误信息（如果有）
-                        err = data.get("error") or data.get("message") or "分析失败"
-                        st.error(f"分析失败: {err}")
-                        break
-                    else:
-                        progress.progress(min(len(logs) / 25, 0.95))
-                        status_text.text("分析进行中...")
-                time.sleep(2)  # 每2秒轮询一次
+                    # otherwise ignore unknown dicts
+                    continue
+
+                # received a markdown fragment/string
+                if isinstance(item, str):
+                    text = item.strip()
+                    if not text:
+                        continue
+                    # skip exact duplicates
+                    if text in seen:
+                        continue
+                    # skip repeating the very last appended block
+                    if logs and logs[-1].strip() == text:
+                        continue
+                    seen.add(text)
+                    logs.append(item)
+                    # join logs as markdown
+                    combined = "\n\n".join(logs)
+                    log_placeholder.markdown(combined, unsafe_allow_html=False)
+
+            # ws closed; fetch final status by HTTP as fallback
+            try:
+                status_resp = requests.get(f"{api_base}/status/{task_id}")
+                if status_resp.status_code == 200:
+                    data = status_resp.json()
+                    result = data.get("final_result", {}) or {}
+                    signal = result.get("signal") if isinstance(result, dict) else None
+                    st.balloons()
+                    st.success(f"最终信号：**{signal}**")
+                    st.markdown("### 最终决策")
+                    st.markdown(result.get("decision", ""))
+                    st.download_button("下载日志", "\n\n".join(logs), f"analysis_{ticker}.md")
+                else:
+                    st.warning("无法通过 HTTP 获取最终结果，可能已通过 WebSocket 完成。")
+            except Exception as e:
+                st.error(f"获取最终结果失败：{e}")

@@ -78,6 +78,7 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
 
         step = 0
         node_first_seen = set()  # 在 run_analysis 函数开头添加
+        seen_report_hashes = set()  # 用于去重跨步产生的相同报告内容
 
         for i, chunk in enumerate(trading_graph.stream(graph_input, {"recursion_limit": user_config["max_recur_limit"]}), 1):
             step += 1
@@ -88,6 +89,8 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
                 task_storage[task_id]["error"] = f"Graph exceeded max steps ({max_steps}). Aborted."
                 return
             node_name = list(chunk.keys())[0]
+            # 记录当前 step 和节点，便于诊断重复问题
+            append_log(task_id, f"(graph step {step+1}) 执行节点: {node_name}")
             icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
            
             # 只在第一次进入该分析师节点时显示“开始分析”
@@ -119,7 +122,15 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
             for key, label in reports.items():
                 value = update.get(key, "")
                 if value.strip():  # 有内容才打印完整
-                    append_log(task_id, f"{label}已生成:\n{value}")
+                    # 跨步去重：同样内容只记录一次
+                    try:
+                        import hashlib
+                        h = hashlib.sha256(value.encode('utf-8')).hexdigest()
+                    except Exception:
+                        h = str(value)
+                    if h not in seen_report_hashes:
+                        append_log(task_id, f"{label}已生成:\n{value}")
+                        seen_report_hashes.add(h)
                 elif key in update:
                     append_log(task_id, f"{label}生成中...")
 
