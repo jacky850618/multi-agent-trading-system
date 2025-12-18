@@ -33,7 +33,7 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
 
         # 2. 构建输入状态
         graph_input = AgentState(
-            messages=[HumanMessage(content=f"Analyze {ticker} for trading on {trade_date}")],
+            messages=[HumanMessage(content=f"分析 {ticker} 在交易日 {trade_date}")],
             company_of_interest=ticker,
             trade_date=trade_date,
             investment_debate_state=InvestDebateState({

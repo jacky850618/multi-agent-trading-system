@@ -80,11 +80,10 @@ class ConditionalLogic:
 
 
 def create_msg_delete():
+    # Helper function to clear messages from the state. This is useful to prevent
+    # the context from one analyst from leaking into the next analyst's prompt.
     def delete_messages(state):
-        # 彻底清理消息历史，只保留一条继续提示
-        return {
-            "messages": [HumanMessage(content="Continue to next phase.")]
-        }
+        return {"messages": [RemoveMessage(id=m.id) for m in state["messages"]] + [HumanMessage(content="Continue")]}
     return delete_messages
 
 

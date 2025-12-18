@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from .storage import create_task, get_task
 from .tasks import run_analysis
 from .config_user import get_user_config
+from .storage import task_storage
 
 app = FastAPI(title="Deep Thinking Trading API")
 user_config = get_user_config()
@@ -29,6 +30,25 @@ def get_status(task_id: str):
         "logs": task["logs"],
         "final_result": task.get("final_result")
     }
+
+
+@app.get("/tasks")
+def list_tasks(status: str = None):
+    # 返回当前内存中的任务列表，可选按 status 过滤
+    items = []
+    for tid, t in task_storage.items():
+        if status and t.get("status") != status:
+            continue
+        created = t.get("created_at")
+        items.append({
+            "task_id": tid,
+            "ticker": t.get("ticker"),
+            "trade_date": t.get("trade_date"),
+            "status": t.get("status"),
+            "logs_count": len(t.get("logs", [])),
+            "created_at": created.isoformat() if created is not None else None,
+        })
+    return {"tasks": items}
 
 
 print(

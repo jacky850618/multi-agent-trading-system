@@ -321,6 +321,41 @@ if not is_configured(user_config):
 
 st.success("✅ 系统配置完成，可以开始分析！")
 
+# ------------------ 分析中任务面板 ------------------
+api_base = user_config.get("API_BASE", DEFAULT_CONFIG["API_BASE"]).rstrip("/")
+session = get_smart_session(user_config)
+try:
+    tasks_resp = session.get(f"{api_base}/tasks", timeout=3)
+    if tasks_resp.status_code == 200:
+        tasks = tasks_resp.json().get("tasks", [])
+    else:
+        tasks = []
+except Exception as e:
+    tasks = []
+
+running_tasks = [t for t in tasks if t.get("status") != "completed"]
+if running_tasks:
+    st.markdown("### 🔄 分析中任务")
+    for t in running_tasks:
+        title = f"{t.get('ticker')}  — {t.get('status')}  — {t.get('created_at') or ''}"
+        with st.expander(title, expanded=False):
+            st.write(f"Task ID: {t.get('task_id')}")
+            st.write(f"日志行数: {t.get('logs_count')}")
+            if st.button("查看详情", key=f"view_{t.get('task_id')}"):
+                try:
+                    s = session.get(f"{api_base}/status/{t.get('task_id')}", timeout=5)
+                    if s.status_code == 200:
+                        data = s.json()
+                        logs = data.get("logs", []) or []
+                        st.text_area("实时分析日志", "\n".join(logs), height=400)
+                        final = data.get("final_result") or {}
+                        st.write("最终结果:", final)
+                    else:
+                        st.error(f"无法获取任务详情：{s.status_code}")
+                except Exception as e:
+                    st.error(f"获取任务详情失败：{e}")
+
+
 col1, col2 = st.columns(2)
 with col1:
     ticker = st.text_input("股票代码", value="NVDA", help="例如：NVDA, AAPL, 0700.HK")
