@@ -1,4 +1,4 @@
-from .storage import append_log, complete_task, task_storage
+from .storage import append_log, complete_task, task_storage, add_report, update_progress
 from .graph import create_trading_graph
 from .evaluation import *
 from .agents import quick_thinking_llm
@@ -91,6 +91,12 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
             node_name = list(chunk.keys())[0]
             # 记录当前 step 和节点，便于诊断重复问题
             append_log(task_id, f"(graph step {step+1}) 执行节点: {node_name}")
+            # update progress after discovering node
+            try:
+                frac = min(step / max_steps, 1.0)
+                update_progress(task_id, frac, f"{node_name}")
+            except Exception:
+                pass
             icon_text = node_icons.get(node_name, f"▶️ 执行节点: {node_name}")
            
             # 只在第一次进入该分析师节点时显示“开始分析”
@@ -129,22 +135,37 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
                     except Exception:
                         h = str(value)
                     if h not in seen_report_hashes:
-                        append_log(task_id, f"{label}已生成:\n{value}")
+                        # store structured report and append a short log
+                        add_report(task_id, label, value)
                         seen_report_hashes.add(h)
                 elif key in update:
                     append_log(task_id, f"{label}生成中...")
 
             # 其他字段
+            # Treat key outputs as structured reports so frontend shows them as separate tabs
             if update.get('investment_plan'):
-                append_log(task_id, f"📋 研究主管投资计划已制定: {update['investment_plan']}")
+                try:
+                    add_report(task_id, "📋 研究主管投资计划", update['investment_plan'])
+                except Exception:
+                    append_log(task_id, f"📋 研究主管投资计划已制定: {update['investment_plan']}")
             if update.get('trader_investment_plan'):
-                append_log(task_id, f"🏆 交易员提案已生成: {update['trader_investment_plan']}")
+                try:
+                    add_report(task_id, "🏆 交易员提案", update['trader_investment_plan'])
+                except Exception:
+                    append_log(task_id, f"🏆 交易员提案已生成: {update['trader_investment_plan']}")
             if update.get('final_trade_decision'):
-                append_log(task_id, f"🏆 最终决策: {update['final_trade_decision']}")
+                try:
+                    add_report(task_id, "🏆 最终决策", update['final_trade_decision'])
+                except Exception:
+                    append_log(task_id, f"🏆 最终决策: {update['final_trade_decision']}")
 
             final_state = update
 
         append_log(task_id, "✅ 主工作流执行完成！正在后处理...")
+        try:
+            update_progress(task_id, 0.95, "后处理")
+        except Exception:
+            pass
 
         # 4. 提取交易信号
         signal_processor = SignalProcessor(quick_thinking_llm)
@@ -284,6 +305,10 @@ def run_analysis(task_id: str, ticker: str, trade_date: str):
             append_log(task_id, f"审计失败: {str(e)}")
 
         # 7. 任务完成
+        try:
+            update_progress(task_id, 1.0, "完成")
+        except Exception:
+            pass
         complete_task(task_id, final_state, final_signal)
 
     except Exception as e:

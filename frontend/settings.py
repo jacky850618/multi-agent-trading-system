@@ -114,7 +114,7 @@ def get_smart_session(config):
                 "http": proxy_url,
                 "https": proxy_url,
             })
-            st.success(f"代理已启用：{proxy_url}（外部服务走代理，本地直连）")
+            # st.success(f"代理已启用：{proxy_url}（外部服务走代理，本地直连）")
         else:
             st.warning("代理启用但地址/端口为空，将直连所有服务")
 
@@ -152,8 +152,13 @@ def render_settings(user_config):
 
     with st.expander("🔑 API Keys", expanded=not is_configured(user_config)):
         finnhub_key = st.text_input("Finnhub API Key", value=user_config.get("FINNHUB_API_KEY", ""), type="password")
+        st.caption("用途：用于获取实时与历史市场数据（行情、财务、指标等）。申请地址：https://finnhub.io/")
+
         tavily_key = st.text_input("Tavily API Key", value=user_config.get("TAVILY_API_KEY", ""), type="password")
+        st.caption("用途：用于访问社交媒体与另类数据源（情绪、话题热度等）。申请/文档地址：请参考 Tavily 官方网站（例如 https://tavily.ai 或您的服务提供商控制台）。")
+
         langsmith_key = st.text_input("LangSmith API Key（可选）", value=user_config.get("LANGSMITH_API_KEY", ""), type="password")
+        st.caption("用途：用于将模型调用与运行时追踪发送到 LangSmith（调试、可观测性与运行记录）。申请地址： https://www.langsmith.com/ 或 LangSmith 控制台。")
 
     with st.expander("🤖 大语言模型配置"):
         llm_provider_options = ["ChatGPT(Openai)", "Deepseek", "通义千问(qwen)", "豆包(doubao)"]
@@ -170,6 +175,49 @@ def render_settings(user_config):
         deep_think_llm = st.text_input("复杂推理模型 (deep_think_llm)", value=user_config.get("deep_think_llm", ""))
         quick_think_llm = st.text_input("快速处理模型 (quick_think_llm)", value=user_config.get("quick_think_llm", ""))
         backend_url = st.text_input("模型基地址 (backend_url)", value=user_config.get("backend_url", ""))
+
+        with st.expander("LLM 帮助 / 推荐配置（点击查看）", expanded=False):
+            provider_tips = {
+                "ChatGPT(Openai)": {
+                    "deep": "gpt-4o",
+                    "quick": "gpt-4o-mini",
+                    "backend": "https://api.openai.com/v1",
+                    "apply": "https://platform.openai.com/account/api-keys",
+                    "note": "OpenAI 适合高质量复杂推理与决策；按需选择模型规格以平衡成本与性能。"
+                },
+                "Deepseek": {
+                    "deep": "deepseek-chat",
+                    "quick": "deepseek-coder",
+                    "backend": "https://api.deepseek.com/v1",
+                    "apply": "https://platform.deepseek.com/api_keys",
+                    "note": "Deepseek 提供低延迟的企业模型（示例链接，请参考供应商文档）。"
+                },
+                "通义千问(qwen)": {
+                    "deep": "qwen-7b",
+                    "quick": "qwen-mini",
+                    "backend": "请参考阿里云通义千问控制台（阿里云）",
+                    "apply": "https://www.aliyun.com/（在阿里云控制台搜索 “通义千问” 以获取 API Key）",
+                    "note": "通义千问由阿里巴巴提供，适合中文场景；请在阿里云控制台创建并查看接入文档。"
+                },
+                "豆包(doubao)": {
+                    "deep": "（示例模型，依据供应商）",
+                    "quick": "（示例模型，依据供应商）",
+                    "backend": "请参考您的豆包供应商或私有部署文档",
+                    "apply": "请咨询豆包供应商或查看其开发者控制台/文档",
+                    "note": "“豆包” 在此作为示例占位（不同机构实现不同）。如需我把具体供应商链接或默认模型写入配置，请提供准确 URL 或说明。"
+                }
+            }
+            tip = provider_tips.get(llm_provider, {})
+            if tip:
+                st.markdown(f"**建议复杂推理模型:** {tip.get('deep')}  ")
+                st.markdown(f"**建议快速处理模型:** {tip.get('quick')}  ")
+                st.markdown(f"**建议模型基地址:** {tip.get('backend')}  ")
+                st.markdown(f"**API Key 申请/文档:** [{tip.get('apply')}]({tip.get('apply')})  ")
+                st.caption(tip.get('note'))
+            else:
+                st.write("请参考所选提供商的官方文档以获取推荐模型与申请链接。")
+
+ 
 
     with st.expander("🛠️ 系统参数"):
         max_debate = st.slider("多空辩论轮数", 1, 5, user_config.get("max_debate_rounds", 2))

@@ -67,38 +67,7 @@ with home_tab:
     # ------------------ 分析中任务面板 ------------------
     api_base = user_config.get("API_BASE", settings_mod.DEFAULT_CONFIG["API_BASE"]).rstrip("/")
     session = settings_mod.get_smart_session(user_config)
-    try:
-        tasks_resp = session.get(f"{api_base}/tasks", timeout=3)
-        if tasks_resp.status_code == 200:
-            tasks = tasks_resp.json().get("tasks", [])
-        else:
-            tasks = []
-    except Exception as e:
-        tasks = []
-
-    running_tasks = [t for t in tasks if t.get("status") != "completed"]
-    if running_tasks:
-        st.markdown("### 🔄 分析中任务")
-        for t in running_tasks:
-            title = f"{t.get('ticker')}  — {t.get('status')}  — {t.get('created_at') or ''}"
-            with st.expander(title, expanded=False):
-                st.write(f"Task ID: {t.get('task_id')}")
-                st.write(f"日志行数: {t.get('logs_count')}")
-                if st.button("查看详情", key=f"view_{t.get('task_id')}"):
-                    try:
-                        s = session.get(f"{api_base}/status/{t.get('task_id')}", timeout=5)
-                        if s.status_code == 200:
-                            data = s.json()
-                            logs = data.get("logs", []) or []
-                            st.text_area("实时分析日志", "\n".join(logs), height=400)
-                            final = data.get("final_result") or {}
-                            st.write("最终结果:", final)
-                        else:
-                            st.error(f"无法获取任务详情：{s.status_code}")
-                    except Exception as e:
-                        st.error(f"获取任务详情失败：{e}")
-
-
+  
     col1, col2 = st.columns(2)
     with col1:
         ticker = st.text_input("股票代码", value="NVDA", help="例如：NVDA, AAPL, 0700.HK")
@@ -110,14 +79,16 @@ with home_tab:
     trade_date = trade_date_input.strftime('%Y-%m-%d')
 
     if st.button("🚀 开始深度分析", type="primary", use_container_width=True):
-        st.info("正在提交分析任务...")
+        submit_ph = st.empty()
+        submit_ph.info("正在提交分析任务...")
         api_base = user_config["API_BASE"]
         resp = requests.post(f"{api_base}/start", json={"ticker": ticker, "trade_date": trade_date})
         if resp.status_code != 200:
-            st.error("后端服务不可用")
+            submit_ph.error("后端服务不可用")
         else:
             task_id = resp.json()["task_id"]
-            st.success(f"任务提交成功！Task ID: {task_id}")
+            # persist the success message in a placeholder so it doesn't vanish on reruns
+            submit_ph.success(f"任务提交成功！Task ID: {task_id}")
             # ---------------- websocket listener ----------------
             q = queue.Queue()
             stop_event = threading.Event()
@@ -141,6 +112,10 @@ with home_tab:
                         parsed = _json.loads(message)
                         # If structured message contains 'line' or 'markdown', use that
                         if isinstance(parsed, dict):
+                            # structured report message
+                            if parsed.get("type") == "report":
+                                out_q.put(parsed)
+                                return
                             if parsed.get("line"):
                                 out_q.put(parsed.get("line"))
                                 return
@@ -177,9 +152,16 @@ with home_tab:
             progress = st.progress(0)
             status_text = st.empty()
 
+            # keep a current compact status (e.g. timestamped "任务启动: ..." lines)
+            current_status = None
+
+            # Placeholder for report tabs
+            reports_placeholder = st.empty()
+
             logs = []
             finished = False
             seen = set()
+            reports_contents = {}  # label -> markdown body
             # read from queue until None sentinel
             while True:
                 try:
@@ -193,12 +175,56 @@ with home_tab:
                         break
                     # no new message, continue polling
                     # update progress placeholder periodically
-                    progress.progress(min(len(logs) / 25, 0.95))
-                    status_text.text("分析进行中...")
+                    # progress updated each loop below as well
+                    if current_status:
+                        status_text.text(f"分析进行中({current_status})...")
+                    else:
+                        status_text.text("分析进行中...")
                     continue
 
                 # handle structured final messages (dict) from WS
                 if isinstance(item, dict):
+                    # handle structured messages
+                    # progress messages -> update progress bar and status
+                    if item.get("type") == "progress":
+                        try:
+                            prog = float(item.get("progress", 0.0) or 0.0)
+                        except Exception:
+                            prog = 0.0
+                        try:
+                            progress.progress(min(max(prog, 0.0), 1.0))
+                        except Exception:
+                            pass
+                        pstatus = item.get("status")
+                        try:
+                            if pstatus:
+                                status_text.text(f"分析进行中({pstatus})... {int(prog*100)}%")
+                            else:
+                                status_text.text(f"分析进行中... {int(prog*100)}%")
+                        except Exception:
+                            pass
+                        continue
+
+                    # report messages -> add to report tabs
+                    if item.get("type") == "report":
+                        label = item.get("label") or item.get("name") or "报告"
+                        body = item.get("markdown") or item.get("body") or ""
+                        try:
+                            reports_contents[label] = body
+                        except Exception:
+                            reports_contents[label] = str(body)
+                        # refresh tabs display immediately
+                        try:
+                            titles = list(reports_contents.keys())
+                            combined = "\n\n".join(logs)
+                            tabs = reports_placeholder.tabs(["日志"] + titles)
+                            tabs[0].markdown(combined, unsafe_allow_html=False)
+                            for idx, title in enumerate(titles, start=1):
+                                tabs[idx].markdown(reports_contents.get(title, ""), unsafe_allow_html=False)
+                        except Exception:
+                            reports_placeholder.markdown("\n\n".join(logs), unsafe_allow_html=False)
+                        continue
+
                     # if backend sent a final_result payload, render final decision
                     final = item.get("final_result") or item.get("final") or item.get("result")
                     if final:
@@ -217,6 +243,36 @@ with home_tab:
                     text = item.strip()
                     if not text:
                         continue
+
+                    # If message is a short status line (timestamped or startup/info messages),
+                    # treat it as the status summary and do NOT append to the main logs.
+                    try:
+                        import re
+                        # timestamped lines like: [02:01:06] 任务启动：分析 NVDA 于 2025-12-17
+                        m_ts = re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s*(.+)$", text)
+                        if m_ts:
+                            status_msg = m_ts.group(1).strip()
+                            current_status = status_msg
+                            status_text.text(f"分析进行中({status_msg})...")
+                            # do not add to logs
+                            continue
+
+                        # plain short status lines or lines starting with emoji or key phrases
+                        if text.startswith("✅") or "任务启动" in text or "开始执行" in text or "独立工作流" in text:
+                            current_status = text
+                            status_text.text(f"分析进行中({text})...")
+                            continue
+
+                        # update status if message contains node info like '执行节点: ...'
+                        m = re.search(r"执行节点:\s*(.*)$", text)
+                        if m:
+                            node_name = m.group(1).strip()
+                            current_status = node_name
+                            status_text.text(f"分析进行中({node_name})...")
+                            # continue processing this line as a normal log as it may contain useful details
+                    except Exception:
+                        pass
+
                     # skip exact duplicates
                     if text in seen:
                         continue
@@ -225,9 +281,36 @@ with home_tab:
                         continue
                     seen.add(text)
                     logs.append(item)
-                    # join logs as markdown
+
+                    # detect generated report blocks of form "<label>已生成:\n<markdown>"
+                    if "已生成:\n" in text:
+                        try:
+                            label, body = text.split("已生成:\n", 1)
+                            label = label.strip()
+                            body = body.strip()
+                            # store/overwrite report content
+                            reports_contents[label] = body
+                        except Exception:
+                            pass
+
+                    # join logs as markdown and render inside a single tabs area
                     combined = "\n\n".join(logs)
-                    log_placeholder.markdown(combined, unsafe_allow_html=False)
+                    try:
+                        titles = list(reports_contents.keys())
+                        tabs = reports_placeholder.tabs(["日志"] + titles)
+                        tabs[0].markdown(combined or "(无日志)", unsafe_allow_html=False)
+                        for idx, title in enumerate(titles, start=1):
+                            body_md = reports_contents.get(title, "")
+                            tabs[idx].markdown(body_md, unsafe_allow_html=False)
+                    except Exception:
+                        # fallback: plain markdown
+                        reports_placeholder.markdown(combined or "(无日志)", unsafe_allow_html=False)
+
+                # update progress every loop iteration so the progress bar moves
+                try:
+                    progress.progress(min(len(logs) / 25, 0.95))
+                except Exception:
+                    pass
 
             # ws closed; fetch final status by HTTP as fallback
             try:

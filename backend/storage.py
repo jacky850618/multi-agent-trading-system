@@ -14,6 +14,9 @@ def create_task(ticker: str, trade_date: str) -> str:
         "status": "running",
         "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] 任务启动：分析 {ticker} 于 {trade_date}"],
         "final_result": None,
+        "reports": {},
+        "progress": 0.0,
+        "progress_status": "启动中",
         "created_at": datetime.now()
     }
     return task_id
@@ -40,6 +43,18 @@ def get_task(task_id: str):
         return task_storage[task_id]
     return None
 
+
+def update_progress(task_id: str, progress: float, status: str = None):
+    """Set a task's progress (0.0-1.0) and optional status string."""
+    if task_id in task_storage:
+        try:
+            p = float(progress)
+        except Exception:
+            return
+        task_storage[task_id]["progress"] = max(0.0, min(1.0, p))
+        if status is not None:
+            task_storage[task_id]["progress_status"] = str(status)
+
 def complete_task(task_id: str, final_state: dict, signal: str):
     if task_id in task_storage:
         task_storage[task_id]["status"] = "completed"
@@ -48,3 +63,14 @@ def complete_task(task_id: str, final_state: dict, signal: str):
             "signal": signal
         }
         append_log(task_id, f"分析完成！最终信号: {signal}")
+
+
+def add_report(task_id: str, label: str, markdown: str):
+    """Store a structured report under task_storage[task_id]['reports'].
+    Overwrites existing report with the same label.
+    """
+    if task_id in task_storage:
+        task_storage[task_id].setdefault('reports', {})
+        task_storage[task_id]['reports'][label] = markdown
+        # also append a short log entry for visibility
+        append_log(task_id, f"{label} 报告已生成")

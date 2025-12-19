@@ -68,6 +68,9 @@ async def websocket_status(websocket: WebSocket, task_id: str):
     await websocket.accept()
     try:
         last_idx = 0
+        sent_report_keys = set()
+        last_progress = None
+        last_progress_status = None
         while True:
             task = get_task(task_id)
             if not task:
@@ -81,6 +84,24 @@ async def websocket_status(websocket: WebSocket, task_id: str):
                 for line in logs[last_idx:]:
                     await websocket.send_json({"type": "log", "line": line})
                 last_idx = len(logs)
+
+            # send any new structured reports
+            reports = task.get("reports", {}) or {}
+            for label, body in reports.items():
+                if label not in sent_report_keys:
+                    await websocket.send_json({"type": "report", "label": label, "markdown": body})
+                    sent_report_keys.add(label)
+
+            # send progress updates when changed
+            try:
+                prog = float(task.get("progress", 0.0) or 0.0)
+            except Exception:
+                prog = 0.0
+            prog_status = task.get("progress_status")
+            if last_progress is None or abs(prog - (last_progress or 0.0)) > 1e-6 or (prog_status != last_progress_status):
+                await websocket.send_json({"type": "progress", "progress": prog, "status": prog_status})
+                last_progress = prog
+                last_progress_status = prog_status
 
             status = task.get("status")
             if status == "completed":
